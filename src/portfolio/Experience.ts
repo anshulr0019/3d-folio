@@ -3,11 +3,12 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { World, Zone } from "./World";
+import { World, Zone, DayNightMode, InteractiveObjectData } from "./World";
 import { Character } from "./Character";
 import { EventEmitter } from "./EventEmitter";
 import { sound } from "./Audio";
 import { WeatherType } from "./Weather";
+import { CONTENT } from "./content";
 import gsap from "gsap";
 
 export type GameState =
@@ -18,6 +19,31 @@ export type GameState =
   | "DOOR_TRANSITION"
   | "STREET"
   | "MODAL";
+
+// Pre-allocated collision tables to avoid array & object allocations in render loop
+const STREET_HOUSES = [
+  { x: -14, z: -20, r: 5.8, rSq: 33.64 },
+  { x: 14, z: -38, r: 5.8, rSq: 33.64 },
+  { x: -14, z: -58, r: 5.8, rSq: 33.64 },
+  { x: 14, z: -76, r: 5.8, rSq: 33.64 },
+];
+
+const STREET_OBSTACLES = [
+  { x: 0, z: -105, r: 2.8, rSq: 7.84 },      // Hero Statue Base
+  { x: -6.8, z: -98, r: 0.9, rSq: 0.81 },     // Left Plaza Torch Lamp
+  { x: 6.8, z: -98, r: 0.9, rSq: 0.81 },      // Right Plaza Torch Lamp
+  { x: -5.2, z: -102.5, r: 1.1, rSq: 1.21 },  // LinkedIn Plinth
+  { x: -2.2, z: -108.5, r: 1.1, rSq: 1.21 },  // GitHub Plinth
+  { x: 2.2, z: -108.5, r: 1.1, rSq: 1.21 },   // Gmail Plinth
+  { x: 5.2, z: -102.5, r: 1.1, rSq: 1.21 },   // Phone Plinth
+];
+
+const ROOM_OBSTACLES = [
+  { x: -4.2, z: -5.2, r: 1.8, rSq: 3.24 }, // Gaming Desk
+  { x: 5.2, z: -5.6, r: 1.8, rSq: 3.24 },  // Almirah / Wardrobe
+  { x: 5.8, z: 3.5, r: 1.5, rSq: 2.25 },   // Arcade Machine
+  { x: 4.2, z: -0.5, r: 1.5, rSq: 2.25 },  // Reading Lounge Armchair
+];
 
 export class Experience extends EventEmitter {
   private canvas: HTMLCanvasElement;
@@ -36,6 +62,11 @@ export class Experience extends EventEmitter {
   // Input
   keys = new Set<string>();
   joystick = { x: 0, y: 0 };
+
+  // Raycasting & Interactive objects
+  private raycaster = new THREE.Raycaster();
+  private pointer = new THREE.Vector2(-999, -999);
+  hoveredObject: InteractiveObjectData | null = null;
 
   // Camera – spring physics
   private cameraVelocity = new THREE.Vector3();
@@ -67,29 +98,27 @@ export class Experience extends EventEmitter {
     this.canvas = canvas;
 
     // ── Renderer ──────────────────────────────
-    // Cap pixel ratio at 1 – biggest single perf win on Retina Macs.
-    // Bloom runs at half-res internally so Retina 2x is pure waste here.
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: false, // off when post-processing is active (MSAA replaced by TAA/bloom)
+      antialias: false,
       powerPreference: "high-performance",
     });
-    this.renderer.setPixelRatio(1); // always 1x – quality is indistinguishable with bloom
+    this.renderer.setPixelRatio(1);
 
     const w = canvas.clientWidth || window.innerWidth;
     const h = canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h);
-    this.renderer.shadowMap.enabled = false; // Baked contact shadow planes used instead of expensive shadow maps
+    this.renderer.shadowMap.enabled = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15; // brighter overall
+    this.renderer.toneMappingExposure = 1.15;
 
     // ── Scene ─────────────────────────────────
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0d0d1a);
-    this.scene.fog = new THREE.FogExp2(0x12121e, 0.011); // lighter fog
+    this.scene.fog = new THREE.FogExp2(0x12121e, 0.011);
 
     // ── Camera ────────────────────────────────
-    this.camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 200); // reduced far clip
+    this.camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 200);
     this.camera.position.set(0, 3.8, 7.6);
 
     // ── Post-processing ───────────────────────
@@ -100,12 +129,35 @@ export class Experience extends EventEmitter {
     ro.observe(canvas);
     window.addEventListener("resize", () => this.resize());
 
-    // ── Input ─────────────────────────────────
+    // ── Input & Raycast Listeners ─────────────
     window.addEventListener("keydown", (e) => {
       this.keys.add(e.code);
+
+      // KeyE / KeyF: Interact / Open Modal on active zone
+      if ((e.code === "KeyE" || e.code === "KeyF") && (this.state === "ROOM" || this.state === "STREET")) {
+        if (this.nearestZone) {
+          this.openModal(this.nearestZone.id);
+        }
+      }
+
       this.emit("keydown", e.code);
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
+
+    // Pointer hover tracking
+    canvas.addEventListener("pointermove", (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      this.checkRaycastHover(e.clientX, e.clientY);
+    });
+
+    // Pointer click on interactive 3D objects
+    canvas.addEventListener("pointerdown", () => {
+      if (this.hoveredObject && (this.state === "ROOM" || this.state === "STREET")) {
+        this.handleObjectClick(this.hoveredObject);
+      }
+    });
   }
 
   private buildPostProcessing(w: number, h: number) {
@@ -282,6 +334,59 @@ export class Experience extends EventEmitter {
     });
   }
 
+  private checkRaycastHover(screenX: number, screenY: number) {
+    if (this.state !== "ROOM" && this.state !== "STREET") {
+      if (this.hoveredObject) {
+        this.hoveredObject = null;
+        this.canvas.style.cursor = "default";
+        this.emit("hoverObject", null);
+      }
+      return;
+    }
+
+    if (!this.world?.interactiveObjects?.length) return;
+
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const intersects = this.raycaster.intersectObjects(this.world.interactiveObjects, true);
+
+    let found: InteractiveObjectData | null = null;
+    for (let i = 0; i < intersects.length; i++) {
+      let obj: THREE.Object3D | null = intersects[i].object;
+      while (obj && !obj.userData?.interactive) {
+        obj = obj.parent;
+      }
+      if (obj?.userData?.interactive) {
+        found = obj.userData.interactive as InteractiveObjectData;
+        break;
+      }
+    }
+
+    if (found !== this.hoveredObject) {
+      this.hoveredObject = found;
+      this.canvas.style.cursor = found ? "pointer" : "default";
+      this.emit("hoverObject", found ? { ...found, screenX, screenY } : null);
+    }
+  }
+
+  handleObjectClick(data: InteractiveObjectData) {
+    if (data.id === "arcade") {
+      this.openModal("arcade");
+    } else if (data.id.startsWith("contact_")) {
+      if (data.id === "contact_linkedin") window.open("https://linkedin.com", "_blank");
+      else if (data.id === "contact_github") window.open("https://github.com", "_blank");
+      else if (data.id === "contact_gmail") window.location.href = `mailto:${CONTENT.contact.email}`;
+    } else {
+      this.openModal(data.id);
+    }
+  }
+
+  toggleDayNight(): DayNightMode {
+    const next = this.world.toggleDayNightMode();
+    ;(sound as any).playClick();
+    this.emit("dayNightChange", next);
+    return next;
+  }
+
   openModal(zoneId: string) {
     if (this.state !== "STREET" && this.state !== "ROOM") return;
     sound.playModalPop();
@@ -319,11 +424,14 @@ export class Experience extends EventEmitter {
     }
 
     if (this.state === "LOADING") {
-      this.composer.render();
       return;
     }
 
-    if (this.state !== "MODAL" && this.state !== "DOOR_TRANSITION" && this.state !== "INTRO") {
+    if (
+      this.state !== "MODAL" &&
+      this.state !== "DOOR_TRANSITION" &&
+      this.state !== "INTRO"
+    ) {
       const isStreet = !!this.world.streetGroup.parent;
       const surface = isStreet ? "asphalt" : "wood";
       this.character.update(this.keys, this.joystick, delta, elapsed, this.cameraYaw, surface);
@@ -356,6 +464,12 @@ export class Experience extends EventEmitter {
     this.composer.render();
   }
 
+  private static _tempTarget = new THREE.Vector3();
+  private static _tempDesiredOffset = new THREE.Vector3();
+  private static _tempDesiredLookOffset = new THREE.Vector3();
+  private static _tempLookTarget = new THREE.Vector3();
+  private static _tempError = new THREE.Vector3();
+
   private applyCollisions(pos: THREE.Vector3, isStreet: boolean) {
     if (isStreet) {
       // 1. Boulevard & Sidewalk Outer Boundaries (prevents hair/head clipping into house roofs)
@@ -363,14 +477,15 @@ export class Experience extends EventEmitter {
       pos.x = THREE.MathUtils.clamp(pos.x, -10.8, 10.8);
 
       // 2. Lamp Post Collisions (Lamps at X = ±8.2, Z = -12, -40, -68, -96, -124)
-      const lampXs = [-8.2, 8.2];
+      const minDist = 0.95;
+      const minDistSq = 0.9025;
       for (let z = -12; z > -130; z -= 28) {
-        for (const lx of lampXs) {
+        for (let lxIdx = 0; lxIdx < 2; lxIdx++) {
+          const lx = lxIdx === 0 ? -8.2 : 8.2;
           const dx = pos.x - lx;
           const dz = pos.z - z;
           const distSq = dx * dx + dz * dz;
-          const minDist = 0.95; // Lamp post collision radius
-          if (distSq < minDist * minDist && distSq > 0.0001) {
+          if (distSq < minDistSq && distSq > 0.0001) {
             const dist = Math.sqrt(distSq);
             const overlap = minDist - dist;
             pos.x += (dx / dist) * overlap;
@@ -379,40 +494,27 @@ export class Experience extends EventEmitter {
         }
       }
 
-      // 3. House Front Collisions (Houses at X = ±14, Z = -20, -38, -58, -76)
-      const houses = [
-        { x: -14, z: -20 }, { x: 14, z: -38 },
-        { x: -14, z: -58 }, { x: 14, z: -76 }
-      ];
-      for (const h of houses) {
+      // 3. House Front Collisions
+      for (let i = 0; i < STREET_HOUSES.length; i++) {
+        const h = STREET_HOUSES[i];
         const dx = pos.x - h.x;
         const dz = pos.z - h.z;
         const distSq = dx * dx + dz * dz;
-        const houseRadius = 5.8;
-        if (distSq < houseRadius * houseRadius && distSq > 0.0001) {
+        if (distSq < h.rSq && distSq > 0.0001) {
           const dist = Math.sqrt(distSq);
-          const overlap = houseRadius - dist;
+          const overlap = h.r - dist;
           pos.x += (dx / dist) * overlap;
           pos.z += (dz / dist) * overlap;
         }
       }
 
       // 4. Central Statue & Contact Pedestals Collisions
-      const obstacles = [
-        { x: 0, z: -105, r: 2.8 },    // Hero Statue Base
-        { x: -6.8, z: -98, r: 0.9 },   // Left Plaza Torch Lamp
-        { x: 6.8, z: -98, r: 0.9 },    // Right Plaza Torch Lamp
-        { x: -5.2, z: -102.5, r: 1.1 }, // LinkedIn Plinth
-        { x: -2.2, z: -108.5, r: 1.1 }, // GitHub Plinth
-        { x: 2.2, z: -108.5, r: 1.1 },  // Gmail Plinth
-        { x: 5.2, z: -102.5, r: 1.1 },  // Phone Plinth
-      ];
-
-      for (const obs of obstacles) {
+      for (let i = 0; i < STREET_OBSTACLES.length; i++) {
+        const obs = STREET_OBSTACLES[i];
         const dx = pos.x - obs.x;
         const dz = pos.z - obs.z;
         const distSq = dx * dx + dz * dz;
-        if (distSq < obs.r * obs.r && distSq > 0.0001) {
+        if (distSq < obs.rSq && distSq > 0.0001) {
           const dist = Math.sqrt(distSq);
           const overlap = obs.r - dist;
           pos.x += (dx / dist) * overlap;
@@ -425,17 +527,12 @@ export class Experience extends EventEmitter {
       pos.z = THREE.MathUtils.clamp(pos.z, -6.0, 7.5);
 
       // Desk, Almirah & Arcade Machine Collisions
-      const roomObs = [
-        { x: -4.2, z: -5.2, r: 1.8 }, // Gaming Desk
-        { x: 5.2, z: -5.6, r: 1.8 },  // Almirah / Wardrobe
-        { x: 5.8, z: 3.5, r: 1.5 },   // Arcade Machine
-      ];
-
-      for (const obs of roomObs) {
+      for (let i = 0; i < ROOM_OBSTACLES.length; i++) {
+        const obs = ROOM_OBSTACLES[i];
         const dx = pos.x - obs.x;
         const dz = pos.z - obs.z;
         const distSq = dx * dx + dz * dz;
-        if (distSq < obs.r * obs.r && distSq > 0.0001) {
+        if (distSq < obs.rSq && distSq > 0.0001) {
           const dist = Math.sqrt(distSq);
           const overlap = obs.r - dist;
           pos.x += (dx / dist) * overlap;
@@ -448,13 +545,17 @@ export class Experience extends EventEmitter {
   private detectZone() {
     const pos = this.character.group.position;
     let nearest: Zone | null = null;
-    let nearestDist = Infinity;
+    let nearestDistSq = Infinity;
 
-    for (const zone of this.world.zones) {
-      const dist = pos.distanceTo(zone.position);
-      if (dist < zone.radius && dist < nearestDist) {
+    for (let i = 0; i < this.world.zones.length; i++) {
+      const zone = this.world.zones[i];
+      const dx = pos.x - zone.position.x;
+      const dz = pos.z - zone.position.z;
+      const distSq = dx * dx + dz * dz;
+      const rSq = zone.radius * zone.radius;
+      if (distSq < rSq && distSq < nearestDistSq) {
         nearest = zone;
-        nearestDist = dist;
+        nearestDistSq = distSq;
       }
     }
 
@@ -467,59 +568,55 @@ export class Experience extends EventEmitter {
 
   private updateCamera(delta: number) {
     if (!this.character?.group) return;
+
     const char = this.character.group;
     const dt = delta / 1000;
 
     const isStreet = !!this.world.streetGroup.parent;
-
-    // Desired camera offset & lookTarget offset based on location & movement direction
-    let targetOffset = new THREE.Vector3(0, 3.4, 4.8);
-    let targetLookOffset = new THREE.Vector3(0, 1.2, 0);
 
     if (isStreet) {
       const moveZ = this.character.direction.z; // positive when moving South (+Z)
       const isMoving = this.character.isMoving;
 
       if (isMoving && moveZ > 0.3) {
-        // Stepping back / moving South down the road with S key
-        // Elevate camera higher (Y = 9.2) and pull Z forward so player sees the road ahead of character
-        targetOffset.set(0, 9.2, 4.8);
-        targetLookOffset.set(0, 0.8, 3.8);
+        Experience._tempDesiredOffset.set(0, 9.2, 4.8);
+        Experience._tempDesiredLookOffset.set(0, 0.8, 3.8);
       } else if (isMoving && moveZ < -0.3) {
-        // Moving North up the road with W key towards statue / houses
-        targetOffset.set(0, 7.5, 9.2);
-        targetLookOffset.set(0, 0.8, -2.5);
+        Experience._tempDesiredOffset.set(0, 7.5, 9.2);
+        Experience._tempDesiredLookOffset.set(0, 0.8, -2.5);
       } else {
-        // Neutral high 3/4 isometric perspective
-        targetOffset.set(0, 7.8, 8.5);
-        targetLookOffset.set(0, 1.0, 0);
+        Experience._tempDesiredOffset.set(0, 7.8, 8.5);
+        Experience._tempDesiredLookOffset.set(0, 1.0, 0);
       }
 
       // Grand framing near Contact Plaza (Z < -90)
       if (char.position.z < -90) {
-        targetOffset.y += 1.2;
+        Experience._tempDesiredOffset.y += 1.2;
       }
+    } else {
+      Experience._tempDesiredOffset.set(0, 3.4, 4.8);
+      Experience._tempDesiredLookOffset.set(0, 1.2, 0);
     }
 
     // Smooth lerp camera offset for fluid movement
-    this.currentCameraOffset.lerp(targetOffset, Math.min(1, 4.5 * dt));
+    this.currentCameraOffset.lerp(Experience._tempDesiredOffset, Math.min(1, 4.5 * dt));
 
-    let target = char.position.clone().add(this.currentCameraOffset);
+    const target = Experience._tempTarget.copy(char.position).add(this.currentCameraOffset);
 
     if (!isStreet) {
-      target.x = THREE.MathUtils.clamp(target.x, -5.5, 5.5);
-      target.z = THREE.MathUtils.clamp(target.z, -5.5, 6.5);
+      target.x = THREE.MathUtils.clamp(target.x, -3.5, 3.5);
+      target.z = THREE.MathUtils.clamp(target.z, 2.5, 9.5);
+      target.y = Math.max(2.8, target.y);
     }
 
-    // Spring force: pull camera smoothly toward target position
-    const error = target.clone().sub(this.camera.position);
-    const springForce = error.multiplyScalar(this.cameraSpring.stiffness);
-    this.cameraVelocity.add(springForce.multiplyScalar(dt));
+    // Spring force: pull camera smoothly toward target position with ZERO GC allocations
+    const error = Experience._tempError.subVectors(target, this.camera.position);
+    this.cameraVelocity.addScaledVector(error, this.cameraSpring.stiffness * dt);
     this.cameraVelocity.multiplyScalar(this.cameraSpring.damping);
-    this.camera.position.add(this.cameraVelocity.clone().multiplyScalar(dt));
+    this.camera.position.addScaledVector(this.cameraVelocity, dt);
 
     // Smooth camera lookAt targeting character + directional offset
-    const lookTarget = char.position.clone().add(targetLookOffset);
+    const lookTarget = Experience._tempLookTarget.copy(char.position).add(Experience._tempDesiredLookOffset);
     this.cameraLookAt.lerp(lookTarget, Math.min(1, 6 * dt));
     this.camera.lookAt(this.cameraLookAt);
   }
@@ -530,7 +627,8 @@ export class Experience extends EventEmitter {
     if (w === 0 || h === 0) return;
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
-    this.bloomPass.resolution.set(w, h);
+    // Keep bloom at HALF resolution (4x faster fillrate on Retina displays)
+    this.bloomPass.resolution.set(Math.floor(w / 2), Math.floor(h / 2));
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }

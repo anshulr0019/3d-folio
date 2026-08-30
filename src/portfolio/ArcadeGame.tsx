@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { sound } from "./Audio";
 
 interface ArcadeGameProps {
   onClose: () => void;
@@ -22,19 +23,7 @@ export const ArcadeGame: React.FC<ArcadeGameProps> = ({ onClose }) => {
   });
 
   const playBeep = (freq: number, duration: number) => {
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "square";
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + duration);
-    } catch (e) {}
+    sound.playBeep(freq, duration, "square");
   };
 
   const spawnFood = () => {

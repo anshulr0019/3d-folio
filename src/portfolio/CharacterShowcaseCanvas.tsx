@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -17,28 +17,24 @@ export function CharacterShowcaseCanvas() {
     const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 100);
     camera.position.set(0, 1.4, 4.2);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "low-power" });
+    renderer.setPixelRatio(1);
     renderer.setSize(width, height);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
     container.appendChild(renderer.domElement);
 
-    // ── Lighting ──
-    const ambient = new THREE.AmbientLight(0xffffff, 1.2);
+    // ── Optimized Lighting (No expensive PointLights) ──
+    const ambient = new THREE.AmbientLight(0xffffff, 1.4);
     scene.add(ambient);
 
     const keyLight = new THREE.DirectionalLight(0xffeedd, 2.5);
     keyLight.position.set(3, 5, 4);
     scene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0x818cf8, 3.5);
+    const rimLight = new THREE.DirectionalLight(0x818cf8, 2.8);
     rimLight.position.set(-3, 4, -4);
     scene.add(rimLight);
-
-    const fillLight = new THREE.PointLight(0xc084fc, 2.0, 10);
-    fillLight.position.set(0, 1, 2);
-    scene.add(fillLight);
 
     // ── Glowing Platform ──
     const platformGroup = new THREE.Group();

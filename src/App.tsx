@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Experience, GameState } from "./portfolio/Experience";
-import { Zone } from "./portfolio/World";
+import { Zone, DayNightMode } from "./portfolio/World";
 import { ModalContent } from "./portfolio/ModalContent";
 import { CONTENT } from "./portfolio/content";
 import { sound } from "./portfolio/Audio";
@@ -80,7 +80,7 @@ function LoadingScreen({ progress, onStart }: { progress: number; onStart: () =>
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((ready || progress >= 100) && (e.code === "Enter" || e.key === "Enter")) {
         try {
-          sound.playClick();
+          ;(sound as any).playClick()
         } catch {}
         onStart();
       }
@@ -92,7 +92,7 @@ function LoadingScreen({ progress, onStart }: { progress: number; onStart: () =>
   const handleEnterWorld = (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      sound.playClick();
+      ;(sound as any).playClick()
     } catch {}
     onStart();
   };
@@ -417,15 +417,11 @@ function HUD({
   nearestZone,
   onInteract,
   location,
-  weather,
-  onToggleWeather,
 }: {
   state: GameState;
   nearestZone: Zone | null;
   onInteract: () => void;
   location: "room" | "street";
-  weather: WeatherType;
-  onToggleWeather: () => void;
 }) {
   const isPlaying = state === "ROOM" || state === "STREET";
   const [muted, setMuted] = useState(sound.isMuted());
@@ -437,12 +433,12 @@ function HUD({
 
   return (
     <>
-      {/* Top left - Location badge, Audio toggle & Weather Switcher */}
+      {/* Top left - Location badge & Audio toggle */}
       {isPlaying && (
-        <div className="fixed top-4 left-4 z-20 flex flex-wrap items-center gap-3 animate-hud-slide-left">
+        <div className="fixed top-4 left-4 z-20 flex items-center gap-2.5 animate-hud-slide-left">
           <div className="glass-pill px-4 py-2 text-xs font-semibold text-slate-100 flex items-center gap-2 shadow-xl rounded-2xl border border-white/10">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
-            {location === "room" ? "🏠 Developer Studio — Walk to door to exit" : "🌆 Story Boulevard — Explore Buildings"}
+            {location === "room" ? "🏠 Developer Studio" : "🌆 Story Boulevard"}
           </div>
           <button
             onClick={toggleSound}
@@ -450,14 +446,6 @@ function HUD({
             title={muted ? "Unmute Audio" : "Mute Audio"}
           >
             {muted ? "🔇" : "🔊"}
-          </button>
-
-          <button
-            onClick={onToggleWeather}
-            className="glass-pill px-3.5 py-2 rounded-2xl text-xs font-bold text-cyan-300 hover:text-white border border-cyan-500/30 hover:border-cyan-400/60 flex items-center gap-1.5 transition-all shadow-xl active:scale-95"
-            title="Toggle Weather"
-          >
-            {weather === "clear" ? "☀️ Sunny Day" : "🌧️ Cyber Rain"}
           </button>
         </div>
       )}
@@ -489,22 +477,22 @@ function HUD({
       {/* Bottom center - Controls indicator */}
       {isPlaying && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-20 pointer-events-none animate-hud-fade-up">
-          <div className="glass-panel rounded-2xl px-6 py-3 text-xs text-slate-300 flex items-center gap-5 shadow-2xl border border-white/10">
-            <div className="flex items-center gap-1.5">
-              <kbd className="px-2 py-0.5 rounded-lg bg-white/10 border border-white/20 font-mono text-[11px] font-bold text-white shadow-sm">WASD</kbd>
-              <span className="text-slate-400 font-medium">Move</span>
+          <div className="glass-panel rounded-2xl px-5 py-2.5 text-xs text-slate-300 flex items-center gap-4 shadow-2xl border border-white/10">
+            <div className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded-md bg-white/10 border border-white/20 font-mono text-[10px] font-bold text-white shadow-sm">WASD</kbd>
+              <span className="text-slate-400 font-medium text-[11px]">Move</span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <kbd className="px-2 py-0.5 rounded-lg bg-white/10 border border-white/20 font-mono text-[11px] font-bold text-white shadow-sm">Space</kbd>
-              <span className="text-slate-400 font-medium">Jump</span>
+            <div className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded-md bg-white/10 border border-white/20 font-mono text-[10px] font-bold text-white shadow-sm">Space</kbd>
+              <span className="text-slate-400 font-medium text-[11px]">Jump</span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <kbd className="px-2 py-0.5 rounded-lg bg-white/10 border border-white/20 font-mono text-[11px] font-bold text-white shadow-sm">Shift</kbd>
-              <span className="text-slate-400 font-medium">Sprint</span>
+            <div className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded-md bg-white/10 border border-white/20 font-mono text-[10px] font-bold text-white shadow-sm">Shift</kbd>
+              <span className="text-slate-400 font-medium text-[11px]">Sprint</span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <kbd className="px-2 py-0.5 rounded-lg bg-white/10 border border-white/20 font-mono text-[11px] font-bold text-white shadow-sm">E</kbd>
-              <span className="text-slate-400 font-medium">Interact</span>
+            <div className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded-md bg-white/10 border border-white/20 font-mono text-[10px] font-bold text-white shadow-sm">E</kbd>
+              <span className="text-slate-400 font-medium text-[11px]">Interact</span>
             </div>
           </div>
         </div>
@@ -512,7 +500,7 @@ function HUD({
 
       {/* Zone interaction prompt */}
       {isPlaying && nearestZone && (
-        <div className="fixed bottom-22 left-1/2 -translate-x-1/2 z-20 animate-bounce-slow pointer-events-none">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20 animate-bounce-slow pointer-events-none">
           <div
             className="glass-panel border-2 rounded-2xl px-6 py-3.5 text-sm font-bold text-white flex items-center gap-3 shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
             style={{ borderColor: `#${nearestZone.color.toString(16).padStart(6, "0")}` }}
@@ -535,14 +523,34 @@ function HUD({
 
       {/* Door hint in room */}
       {state === "ROOM" && !nearestZone && (
-        <div className="fixed bottom-22 left-1/2 -translate-x-1/2 z-20 pointer-events-none animate-pulse-glow">
-          <div className="glass-panel border border-indigo-500/40 rounded-2xl px-6 py-3 text-sm text-indigo-300 font-medium flex items-center gap-2 shadow-lg">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20 pointer-events-none animate-pulse-glow">
+          <div className="glass-panel border border-indigo-500/40 rounded-2xl px-5 py-2.5 text-xs text-indigo-300 font-medium flex items-center gap-2 shadow-lg">
             <span>🚪</span>
             <span>Walk toward the exit door to enter Boulevard</span>
           </div>
         </div>
       )}
     </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hover Tooltip
+// ─────────────────────────────────────────────────────────────────────────────
+function HoverTooltip({
+  data,
+}: {
+  data: { id: string; label: string; screenX: number; screenY: number };
+}) {
+  return (
+    <div
+      className="fixed pointer-events-none z-40 transform -translate-x-1/2 -translate-y-full mb-3 px-3 py-1.5 rounded-xl glass-panel border border-cyan-400/50 text-xs font-bold text-cyan-200 shadow-2xl flex items-center gap-2 animate-fade-in backdrop-blur-md"
+      style={{ left: data.screenX, top: data.screenY - 8 }}
+    >
+      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+      <span>{data.label}</span>
+      <span className="text-[10px] text-slate-400 font-normal">Click or [E]</span>
+    </div>
   );
 }
 
@@ -562,6 +570,9 @@ function Modal({
     projects: "Featured Projects",
     experience: "Work Experience",
     contact: "Get In Touch",
+    desk: "Workstation & Dev Terminal",
+    showcase: "Showcase & Awards",
+    library: "Reading Lounge & Dev Philosophy",
   };
 
   useEffect(() => {
@@ -698,7 +709,7 @@ export default function App() {
   const [nearestZone, setNearestZone] = useState<Zone | null>(null);
   const [modalSection, setModalSection] = useState<string | null>(null);
   const [location, setLocation] = useState<"room" | "street">("room");
-  const [weather, setWeatherState] = useState<WeatherType>("clear");
+  const [hoveredObj, setHoveredObj] = useState<{ id: string; label: string; screenX: number; screenY: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const isTouchDevice = "ontouchstart" in window;
 
@@ -706,15 +717,6 @@ export default function App() {
     setToast(msg);
     setTimeout(() => setToast(null), duration);
   }, []);
-
-  const handleToggleWeather = useCallback(() => {
-    setWeatherState((prev) => {
-      const next = prev === "clear" ? "rain" : "clear";
-      expRef.current?.setWeather(next);
-      showToast(next === "rain" ? "🌧️ Weather changed to Cyberpunk Rain" : "☀️ Weather changed to Sunny");
-      return next;
-    });
-  }, [showToast]);
 
   // ── Pre-initialize Experience in background ──
   const initEngineInBackground = useCallback(async () => {
@@ -737,6 +739,14 @@ export default function App() {
       setNearestZone(zone);
     });
 
+    exp.on("hoverObject", (obj: any) => {
+      setHoveredObj(obj);
+    });
+
+    exp.on("dayNightChange", (mode: DayNightMode) => {
+      setDayNightMode(mode);
+    });
+
     exp.on("openModal", (id: string) => {
       setModalSection(id);
     });
@@ -746,7 +756,7 @@ export default function App() {
     });
 
     exp.on("enterStreet", () => {
-      showToast("🌆 Welcome to the street! Visit a building to explore my work.");
+      showToast("🌆 Welcome to the street! Visit a building or billboard to explore.");
     });
 
     exp.on("enterRoom", () => {
@@ -777,15 +787,12 @@ export default function App() {
 
   // ── User Clicks ENTER WORLD ────────────────────────
   const startExperience = useCallback(async () => {
-    // 1. Show the "Entering Anshul's World..." transition screen instantly
     setUiState("entering");
 
-    // 2. Make sure engine is initialized
     if (!expRef.current && canvasRef.current) {
       await initEngineInBackground();
     }
 
-    // 3. Give 1.2s for WebGL shader compilation & GPU warmup to settle
     setTimeout(() => {
       setUiState("cinematic");
       expRef.current?.playCinematic();
@@ -805,7 +812,7 @@ export default function App() {
     exp.setState("ROOM");
     setGameState("ROOM");
     setUiState("playing");
-    showToast("🎮 Use WASD to move. Play Arcade or walk to door to exit!");
+    showToast("🎮 Move with WASD. Press [F] to inspect objects, [N] to toggle Day/Night!");
   }, [showToast]);
 
   const handleInteract = useCallback(() => {
@@ -838,11 +845,14 @@ export default function App() {
     exp.joystick = { x, y };
   }, []);
 
-  // ── Keyboard E for interact ────────────────
+  // ── Keyboard E / F for interact ──
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.code === "KeyE" && expRef.current) {
-        const zone = expRef.current.nearestZone;
+      const exp = expRef.current;
+      if (!exp) return;
+
+      if (e.code === "KeyE" || e.code === "KeyF") {
+        const zone = exp.nearestZone;
         if (zone && (gameState === "STREET" || gameState === "ROOM")) {
           handleInteract();
         }
@@ -890,9 +900,12 @@ export default function App() {
           nearestZone={nearestZone}
           onInteract={handleInteract}
           location={location}
-          weather={weather}
-          onToggleWeather={handleToggleWeather}
         />
+      )}
+
+      {/* 3D Hover Tooltip */}
+      {hoveredObj && uiState === "playing" && !modalSection && (
+        <HoverTooltip data={hoveredObj} />
       )}
 
       {/* Modal */}

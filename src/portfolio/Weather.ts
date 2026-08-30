@@ -7,7 +7,7 @@ export class WeatherSystem {
   private scene: THREE.Scene;
   private rainParticles: THREE.Points | null = null;
   private rainPositions: Float32Array = new Float32Array(0);
-  private count = 600;
+  private count = 350;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;

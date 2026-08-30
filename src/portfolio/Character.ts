@@ -36,6 +36,7 @@ export class Character {
   runSpeed = 11.0;
   direction = new THREE.Vector3(0, 0, -1);
   isMoving = false;
+  isRunning = false;
   
   private targetRotY = 0;
   private currentTiltX = 0;
@@ -43,7 +44,6 @@ export class Character {
   private stepTimer = 0;
 
   // Pre-allocated vectors to prevent GC thrashing in render loop
-  private static tempVec = new THREE.Vector3();
   private static dustVec = new THREE.Vector3();
 
   constructor(scene: THREE.Scene) {
@@ -410,11 +410,14 @@ export class Character {
     }
   }
 
+  private dustIdx = 0;
+
   private spawnDust(pos: THREE.Vector3, isRunning = false) {
     const count = isRunning ? 3 : 2;
     for (let s = 0; s < count; s++) {
-      const p = this.dustParticles.find((part) => !part.visible);
-      if (!p) return;
+      const p = this.dustParticles[this.dustIdx];
+      this.dustIdx = (this.dustIdx + 1) % this.dustParticles.length;
+      if (!p) continue;
       // Spawn tight cartoon dust puffs right at the soles of the shoes
       Character.dustVec.set(
         (Math.random() - 0.5) * (isRunning ? 0.16 : 0.08),
@@ -518,6 +521,7 @@ export class Character {
     const isRunning = keys.has("ShiftLeft") || keys.has("ShiftRight");
     const spd = isRunning ? this.runSpeed : this.speed;
     this.isMoving = moveX !== 0 || moveZ !== 0;
+    this.isRunning = isRunning && this.isMoving;
 
     if (this.isMoving) {
       const cos = Math.cos(cameraYaw);
