@@ -276,7 +276,7 @@ function EnteringWorldOverlay() {
       <header className="relative z-10 w-full max-w-6xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_12px_#34d399] animate-pulse" />
-          <span className="text-xs font-mono tracking-widest text-slate-300 uppercase">ANSHUL RIVERA • 3D ENVIRONMENT</span>
+          <span className="text-xs font-mono tracking-widest text-slate-300 uppercase">ANSHUL KUMAR • 3D PORTFOLIO</span>
         </div>
         <div className="text-xs font-mono text-indigo-400/90 tracking-wider">
           SYSTEM_STATUS: PREWARMING_GPU
@@ -296,7 +296,7 @@ function EnteringWorldOverlay() {
           
           {/* Center Badge */}
           <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600 flex items-center justify-center font-black text-xl text-white shadow-[0_0_25px_rgba(99,102,241,0.5)]">
-            AR
+            AK
           </div>
         </div>
 
@@ -307,7 +307,7 @@ function EnteringWorldOverlay() {
           </div>
 
           <h1 className="text-4xl sm:text-6xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white via-slate-100 to-indigo-200">
-            ANSHUL RIVERA
+            ANSHUL KUMAR
           </h1>
 
           <p className="text-sm sm:text-base font-medium text-slate-400 tracking-wide max-w-md mx-auto">
@@ -412,16 +412,126 @@ function IntroOverlay({ onDone }: { onDone: () => void }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HUD
 // ─────────────────────────────────────────────────────────────────────────────
+function ZoneEntryBanner({ banner }: { banner: { title: string; subtitle: string; icon: string; color: string } }) {
+  return (
+    <div className="fixed top-12 left-1/2 -translate-x-1/2 z-40 pointer-events-none animate-hud-fade-up">
+      <div
+        className="glass-panel px-7 py-3.5 rounded-3xl border-2 shadow-[0_20px_50px_rgba(0,0,0,0.7)] flex items-center gap-4 backdrop-blur-xl"
+        style={{ borderColor: banner.color }}
+      >
+        <span className="text-3xl filter drop-shadow-md">{banner.icon}</span>
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-slate-400">DISTRICT ENTRY</div>
+          <div className="text-lg font-extrabold text-white tracking-wide">{banner.title}</div>
+          <div className="text-xs font-medium text-slate-300">{banner.subtitle}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PhotoModeOverlay({
+  onCapture,
+  onExit,
+}: {
+  onCapture: () => void;
+  onExit: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-40 pointer-events-none flex flex-col justify-between p-6">
+      {/* Top Bar */}
+      <div className="flex justify-center">
+        <div className="glass-pill px-6 py-2.5 rounded-2xl text-xs font-semibold text-white flex items-center gap-3 shadow-2xl border border-white/20">
+          <span className="text-amber-400 text-sm">📸</span>
+          <span className="font-bold tracking-wider">PHOTO MODE</span>
+          <span className="text-slate-500">|</span>
+          <span className="text-slate-300">Drag to Orbit • Scroll to Zoom</span>
+        </div>
+      </div>
+
+      {/* Bottom Controls */}
+      <div className="flex justify-center items-center gap-4 pointer-events-auto">
+        <button
+          onClick={onCapture}
+          className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-xl flex items-center gap-2 transition-all active:scale-95 border border-indigo-400/40 cursor-pointer"
+        >
+          <span>📸</span> Capture 4K Snapshot
+        </button>
+        <button
+          onClick={onExit}
+          className="glass-panel px-5 py-3 rounded-2xl text-slate-300 hover:text-white font-semibold text-sm shadow-xl transition-all active:scale-95 border border-white/10 cursor-pointer"
+        >
+          ✕ Exit [P / ESC]
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DevStatsPanel({ exp }: { exp: Experience | null }) {
+  const [fps, setFps] = useState(60);
+  const [coords, setCoords] = useState({ x: 0, y: 0, z: 0 });
+
+  useEffect(() => {
+    let lastTime = performance.now();
+    let frames = 0;
+    const interval = setInterval(() => {
+      const now = performance.now();
+      const delta = (now - lastTime) / 1000;
+      setFps(Math.max(1, Math.round(frames / delta)));
+      frames = 0;
+      lastTime = now;
+
+      if (exp?.character?.group) {
+        const p = exp.character.group.position;
+        setCoords({
+          x: Math.round(p.x * 10) / 10,
+          y: Math.round(p.y * 10) / 10,
+          z: Math.round(p.z * 10) / 10,
+        });
+      }
+    }, 500);
+
+    let req: number;
+    const frameCounter = () => {
+      frames++;
+      req = requestAnimationFrame(frameCounter);
+    };
+    req = requestAnimationFrame(frameCounter);
+
+    return () => {
+      clearInterval(interval);
+      cancelAnimationFrame(req);
+    };
+  }, [exp]);
+
+  return (
+    <div className="fixed top-20 right-4 z-40 glass-panel p-3.5 rounded-2xl text-[11px] font-mono text-emerald-400 space-y-1 shadow-2xl border border-emerald-500/30">
+      <div className="font-bold text-white flex items-center justify-between gap-4">
+        <span>⚡ DEV MONITOR</span>
+        <span className="text-emerald-400">{fps} FPS</span>
+      </div>
+      <div className="text-slate-300">Pos: X:{coords.x} Y:{coords.y} Z:{coords.z}</div>
+      <div className="text-slate-400">Renderer: WebGL2 (ACES Filmic)</div>
+      <div className="text-slate-400">PostFX: Half-Res Bloom</div>
+    </div>
+  );
+}
+
 function HUD({
   state,
   nearestZone,
   onInteract,
   location,
+  gemsCount,
+  onTogglePhotoMode,
 }: {
   state: GameState;
   nearestZone: Zone | null;
   onInteract: () => void;
   location: "room" | "street";
+  gemsCount: { collected: number; total: number };
+  onTogglePhotoMode: () => void;
 }) {
   const isPlaying = state === "ROOM" || state === "STREET";
   const [muted, setMuted] = useState(sound.isMuted());
@@ -433,9 +543,9 @@ function HUD({
 
   return (
     <>
-      {/* Top left - Location badge & Audio toggle */}
+      {/* Top left - Location badge, Audio toggle, Gems counter & Photo Mode */}
       {isPlaying && (
-        <div className="fixed top-4 left-4 z-20 flex items-center gap-2.5 animate-hud-slide-left">
+        <div className="fixed top-4 left-4 z-20 flex flex-wrap items-center gap-2.5 animate-hud-slide-left">
           <div className="glass-pill px-4 py-2 text-xs font-semibold text-slate-100 flex items-center gap-2 shadow-xl rounded-2xl border border-white/10">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
             {location === "room" ? "🏠 Developer Studio" : "🌆 Story Boulevard"}
@@ -446,6 +556,23 @@ function HUD({
             title={muted ? "Unmute Audio" : "Mute Audio"}
           >
             {muted ? "🔇" : "🔊"}
+          </button>
+
+          {/* Skill Gems counter */}
+          <div className="glass-pill px-3.5 py-2 rounded-2xl text-xs font-bold text-cyan-300 flex items-center gap-1.5 shadow-xl border border-cyan-500/30">
+            <span>💎</span>
+            <span>{gemsCount.collected}/{gemsCount.total} Skills</span>
+          </div>
+
+          {/* Photo Mode trigger */}
+          <button
+            onClick={onTogglePhotoMode}
+            className="glass-pill px-3.5 py-2 rounded-2xl text-xs font-bold text-amber-300 hover:text-white border border-amber-500/30 hover:border-amber-400/60 flex items-center gap-1.5 transition-all shadow-xl active:scale-95"
+            title="Enter Photo Mode [P]"
+          >
+            <span>📸</span>
+            <span>Photo</span>
+            <span className="text-[10px] opacity-60 ml-0.5">[P]</span>
           </button>
         </div>
       )}
@@ -463,7 +590,7 @@ function HUD({
             { name: "About Me", color: "bg-pink-400" },
             { name: "Skills", color: "bg-emerald-400" },
             { name: "Projects", color: "bg-amber-400" },
-            { name: "Experience", color: "bg-indigo-400" },
+            { name: "Education", color: "bg-indigo-400" },
             { name: "Contact", color: "bg-rose-400" },
           ].map((item) => (
             <div key={item.name} className="flex items-center gap-2 mb-1.5 text-[11px]">
@@ -493,6 +620,10 @@ function HUD({
             <div className="flex items-center gap-1">
               <kbd className="px-1.5 py-0.5 rounded-md bg-white/10 border border-white/20 font-mono text-[10px] font-bold text-white shadow-sm">E</kbd>
               <span className="text-slate-400 font-medium text-[11px]">Interact</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded-md bg-white/10 border border-white/20 font-mono text-[10px] font-bold text-white shadow-sm">P</kbd>
+              <span className="text-slate-400 font-medium text-[11px]">Photo</span>
             </div>
           </div>
         </div>
@@ -568,10 +699,10 @@ function Modal({
     about: "About Me",
     skills: "Skills & Capabilities",
     projects: "Featured Projects",
-    experience: "Work Experience",
+    experience: "Education",
     contact: "Get In Touch",
     desk: "Workstation & Dev Terminal",
-    showcase: "Showcase & Awards",
+    showcase: "Live Projects",
     library: "Reading Lounge & Dev Philosophy",
   };
 
@@ -711,11 +842,20 @@ export default function App() {
   const [location, setLocation] = useState<"room" | "street">("room");
   const [hoveredObj, setHoveredObj] = useState<{ id: string; label: string; screenX: number; screenY: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [gemsCount, setGemsCount] = useState({ collected: 0, total: 5 });
+  const [photoMode, setPhotoMode] = useState(false);
+  const [showDevStats, setShowDevStats] = useState(false);
+  const [zoneBanner, setZoneBanner] = useState<{ title: string; subtitle: string; icon: string; color: string } | null>(null);
   const isTouchDevice = "ontouchstart" in window;
 
   const showToast = useCallback((msg: string, duration = 3000) => {
     setToast(msg);
     setTimeout(() => setToast(null), duration);
+  }, []);
+
+  const triggerZoneBanner = useCallback((title: string, subtitle: string, icon: string, color = "#818cf8") => {
+    setZoneBanner({ title, subtitle, icon, color });
+    setTimeout(() => setZoneBanner(null), 2800);
   }, []);
 
   // ── Pre-initialize Experience in background ──
@@ -737,14 +877,14 @@ export default function App() {
 
     exp.on("zoneChange", (zone: Zone | null) => {
       setNearestZone(zone);
+      if (zone) {
+        sound.playZoneChime();
+        triggerZoneBanner(zone.label, "Interactive Exploration Hub", "📍", `#${zone.color.toString(16).padStart(6, "0")}`);
+      }
     });
 
     exp.on("hoverObject", (obj: any) => {
       setHoveredObj(obj);
-    });
-
-    exp.on("dayNightChange", (mode: DayNightMode) => {
-      setDayNightMode(mode);
     });
 
     exp.on("openModal", (id: string) => {
@@ -755,20 +895,34 @@ export default function App() {
       setModalSection(null);
     });
 
+    exp.on("gemCollected", ({ gem, count, total }: any) => {
+      setGemsCount({ collected: count, total });
+      showToast(`✨ Collected ${gem.name} (+${gem.exp} XP)! [${count}/${total} Found]`, 3500);
+    });
+
+    exp.on("companionDialogue", (quote: string) => {
+      showToast(`🤖 Byte: "${quote}"`, 4000);
+    });
+
+    exp.on("partyMode", () => {
+      showToast("🎉 SECRET DISCO PARTY MODE ACTIVATED! 🪩", 4500);
+    });
+
+    exp.on("photoModeChange", (active: boolean) => {
+      setPhotoMode(active);
+      if (active) showToast("📸 Photo Mode active! Drag to orbit, scroll to zoom.", 3000);
+    });
+
     exp.on("enterStreet", () => {
-      showToast("🌆 Welcome to the street! Visit a building or billboard to explore.");
+      triggerZoneBanner("Story Boulevard", "Featured Projects & Architecture District", "🌆", "#38bdf8");
     });
 
     exp.on("enterRoom", () => {
-      showToast("🏠 Back in the room.");
-    });
-
-    exp.on("keydown", (code: string) => {
-      if (code === "KeyE") handleInteract();
+      triggerZoneBanner("Developer Studio", "Creative Workspace & Terminal specs", "🏠", "#a855f7");
     });
 
     await exp.init();
-  }, [showToast]);
+  }, [showToast, triggerZoneBanner]);
 
   // ── Simulate loading progress & background engine init ──────
   useEffect(() => {
@@ -812,8 +966,8 @@ export default function App() {
     exp.setState("ROOM");
     setGameState("ROOM");
     setUiState("playing");
-    showToast("🎮 Move with WASD. Press [F] to inspect objects, [N] to toggle Day/Night!");
-  }, [showToast]);
+    triggerZoneBanner("Developer Studio", "Creative Workspace & Terminal Specs", "🏠", "#a855f7");
+  }, [triggerZoneBanner]);
 
   const handleInteract = useCallback(() => {
     const exp = expRef.current;
@@ -839,31 +993,48 @@ export default function App() {
     setModalSection(null);
   }, []);
 
+  const handleTogglePhotoMode = useCallback(() => {
+    expRef.current?.togglePhotoMode();
+  }, []);
+
+  const handleCapturePhoto = useCallback(() => {
+    const dataUrl = expRef.current?.captureScreenshot();
+    if (dataUrl) {
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `Anshul-Kumar-Portfolio-Photo-${Date.now()}.png`;
+      a.click();
+      showToast("💾 High-Resolution Screenshot Downloaded!", 3000);
+    }
+  }, [showToast]);
+
   const handleJoystickMove = useCallback((x: number, y: number) => {
     const exp = expRef.current;
     if (!exp) return;
     exp.joystick = { x, y };
   }, []);
 
-  // ── Keyboard E / F for interact ──
+  // ── Keyboard shortcuts (Ctrl+D for dev stats, ESC for photo mode) ──
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const exp = expRef.current;
       if (!exp) return;
 
-      if (e.code === "KeyE" || e.code === "KeyF") {
-        const zone = exp.nearestZone;
-        if (zone && (gameState === "STREET" || gameState === "ROOM")) {
-          handleInteract();
-        }
+      if ((e.ctrlKey || e.metaKey) && e.code === "KeyD") {
+        e.preventDefault();
+        setShowDevStats((prev) => !prev);
+      }
+
+      if (e.code === "Escape" && exp.photoMode) {
+        exp.togglePhotoMode();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [gameState, handleInteract]);
+  }, []);
 
   return (
-    <div className="fixed inset-0 bg-[#0f0f1a] overflow-hidden">
+    <div className="fixed inset-0 bg-[#0f0f1a] overflow-hidden select-none">
       {/* Three.js canvas */}
       <canvas
         ref={canvasRef}
@@ -893,18 +1064,38 @@ export default function App() {
       {/* Intro */}
       {uiState === "intro" && <IntroOverlay onDone={handleIntroComplete} />}
 
-      {/* HUD */}
-      {uiState === "playing" && (
+      {/* HUD (hidden when in photo mode) */}
+      {uiState === "playing" && !photoMode && (
         <HUD
           state={gameState}
           nearestZone={nearestZone}
           onInteract={handleInteract}
           location={location}
+          gemsCount={gemsCount}
+          onTogglePhotoMode={handleTogglePhotoMode}
         />
       )}
 
+      {/* Photo Mode Overlay */}
+      {uiState === "playing" && photoMode && (
+        <PhotoModeOverlay
+          onCapture={handleCapturePhoto}
+          onExit={handleTogglePhotoMode}
+        />
+      )}
+
+      {/* Zone Entry Banner */}
+      {zoneBanner && !photoMode && uiState === "playing" && (
+        <ZoneEntryBanner banner={zoneBanner} />
+      )}
+
+      {/* Developer Monitor Stats */}
+      {showDevStats && !photoMode && uiState === "playing" && (
+        <DevStatsPanel exp={expRef.current} />
+      )}
+
       {/* 3D Hover Tooltip */}
-      {hoveredObj && uiState === "playing" && !modalSection && (
+      {hoveredObj && uiState === "playing" && !modalSection && !photoMode && (
         <HoverTooltip data={hoveredObj} />
       )}
 
@@ -917,7 +1108,7 @@ export default function App() {
       {toast && <Toast message={toast} />}
 
       {/* Mobile controls */}
-      {uiState === "playing" && isTouchDevice && (
+      {uiState === "playing" && isTouchDevice && !photoMode && (
         <div className="fixed bottom-6 left-6 right-6 z-20 flex justify-between items-end pointer-events-none">
           <div className="pointer-events-auto">
             <MobileJoystick onMove={handleJoystickMove} />

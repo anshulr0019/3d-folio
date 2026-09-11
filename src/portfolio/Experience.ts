@@ -93,6 +93,19 @@ export class Experience extends EventEmitter {
   nearestZone: Zone | null = null;
   private TRANSITION_Z = 7.0;
 
+  // Photo Mode
+  photoMode = false;
+  private isPointerDragging = false;
+  private lastPointerX = 0;
+  private lastPointerY = 0;
+  private photoAzimuth = 0;
+  private photoElevation = 0.35;
+  private photoDistance = 5.0;
+
+  // Konami Easter Egg Sequence
+  private konamiSequence = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight", "KeyB", "KeyA"];
+  private currentKonamiIdx = 0;
+
   constructor(canvas: HTMLCanvasElement) {
     super();
     this.canvas = canvas;
@@ -140,24 +153,76 @@ export class Experience extends EventEmitter {
         }
       }
 
+      // KeyP: Photo Mode toggle
+      if (e.code === "KeyP" && (this.state === "ROOM" || this.state === "STREET")) {
+        this.togglePhotoMode();
+      }
+
+      // Konami code check
+      if (e.code === this.konamiSequence[this.currentKonamiIdx]) {
+        this.currentKonamiIdx++;
+        if (this.currentKonamiIdx === this.konamiSequence.length) {
+          this.currentKonamiIdx = 0;
+          this.triggerPartyMode();
+        }
+      } else if (e.code === "KeyK") {
+        this.triggerPartyMode();
+      } else {
+        this.currentKonamiIdx = 0;
+      }
+
       this.emit("keydown", e.code);
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
 
-    // Pointer hover tracking
+    // Pointer hover & Photo Mode drag tracking
     canvas.addEventListener("pointermove", (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
       this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      this.checkRaycastHover(e.clientX, e.clientY);
+
+      if (this.photoMode && this.isPointerDragging) {
+        const dx = e.clientX - this.lastPointerX;
+        const dy = e.clientY - this.lastPointerY;
+        this.lastPointerX = e.clientX;
+        this.lastPointerY = e.clientY;
+
+        this.photoAzimuth -= dx * 0.008;
+        this.photoElevation = THREE.MathUtils.clamp(
+          this.photoElevation + dy * 0.008,
+          -0.2,
+          1.2
+        );
+      } else {
+        this.checkRaycastHover(e.clientX, e.clientY);
+      }
     });
 
-    // Pointer click on interactive 3D objects
-    canvas.addEventListener("pointerdown", () => {
-      if (this.hoveredObject && (this.state === "ROOM" || this.state === "STREET")) {
+    // Pointer click on interactive 3D objects / photo drag start
+    canvas.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (this.photoMode) {
+        this.isPointerDragging = true;
+        this.lastPointerX = e.clientX;
+        this.lastPointerY = e.clientY;
+      } else if (this.hoveredObject && (this.state === "ROOM" || this.state === "STREET")) {
         this.handleObjectClick(this.hoveredObject);
       }
     });
+
+    window.addEventListener("pointerup", () => {
+      this.isPointerDragging = false;
+    });
+
+    // Wheel zoom in Photo Mode
+    canvas.addEventListener("wheel", (e: WheelEvent) => {
+      if (this.photoMode) {
+        this.photoDistance = THREE.MathUtils.clamp(
+          this.photoDistance + e.deltaY * 0.005,
+          2.0,
+          14.0
+        );
+      }
+    }, { passive: true });
   }
 
   private buildPostProcessing(w: number, h: number) {
@@ -183,6 +248,12 @@ export class Experience extends EventEmitter {
     this.world = new World(this.scene);
     this.character = new Character(this.scene);
     this.cameraOffset.copy(this.roomCameraOffset);
+
+    // Forward collectibles events
+    this.world.collectibles.onCollectCallback = (gem, count, total) => {
+      this.emit("gemCollected", { gem, count, total });
+    };
+
     this.resize();
     this.setState("LOADING");
     this.startLoop();
@@ -371,6 +442,11 @@ export class Experience extends EventEmitter {
   handleObjectClick(data: InteractiveObjectData) {
     if (data.id === "arcade") {
       this.openModal("arcade");
+    } else if (data.id === "companion") {
+      const quote = this.world.companion?.interact() || "Beep boop! 🚀";
+      this.emit("companionDialogue", quote);
+    } else if (data.id === "resume") {
+      window.open("/resume.pdf", "_blank");
     } else if (data.id.startsWith("contact_")) {
       if (data.id === "contact_linkedin") window.open("https://linkedin.com", "_blank");
       else if (data.id === "contact_github") window.open("https://github.com", "_blank");
@@ -378,6 +454,38 @@ export class Experience extends EventEmitter {
     } else {
       this.openModal(data.id);
     }
+  }
+
+  togglePhotoMode(): boolean {
+    this.photoMode = !this.photoMode;
+    if (this.photoMode) {
+      this.photoAzimuth = 0;
+      this.photoElevation = 0.35;
+      this.photoDistance = 5.0;
+    }
+    sound.playModalPop();
+    this.emit("photoModeChange", this.photoMode);
+    return this.photoMode;
+  }
+
+  captureScreenshot(): string {
+    sound.playCameraShutter();
+    this.renderer.render(this.scene, this.camera);
+    return this.renderer.domElement.toDataURL("image/png");
+  }
+
+  triggerPartyMode() {
+    sound.playFanfare();
+    const colors = [0xec4899, 0x38bdf8, 0xa855f7, 0xfacc15, 0x22c55e];
+    let step = 0;
+    const interval = setInterval(() => {
+      const col = colors[step % colors.length];
+      if (this.world.roomCeiling) this.world.roomCeiling.color.setHex(col);
+      if (this.world.roomWarm) this.world.roomWarm.color.setHex(colors[(step + 2) % colors.length]);
+      step++;
+      if (step > 30) clearInterval(interval);
+    }, 150);
+    this.emit("partyMode");
   }
 
   toggleDayNight(): DayNightMode {
@@ -459,7 +567,12 @@ export class Experience extends EventEmitter {
 
     this.updateCamera(delta);
     this.world.updateFade(this.camera);
-    this.world.updateRings(elapsed / 1000, delta / 1000);
+
+    // Pass physics prop parameters to update loop
+    const charPos = this.character?.group?.position;
+    const charVel = this.character?.velocity || Experience._tempVelocity;
+    const isSprinting = this.character?.isRunning || false;
+    this.world.updateRings(elapsed / 1000, delta / 1000, charPos, charVel, isSprinting);
 
     this.composer.render();
   }
@@ -469,6 +582,7 @@ export class Experience extends EventEmitter {
   private static _tempDesiredLookOffset = new THREE.Vector3();
   private static _tempLookTarget = new THREE.Vector3();
   private static _tempError = new THREE.Vector3();
+  private static _tempVelocity = new THREE.Vector3();
 
   private applyCollisions(pos: THREE.Vector3, isStreet: boolean) {
     if (isStreet) {
@@ -572,36 +686,61 @@ export class Experience extends EventEmitter {
     const char = this.character.group;
     const dt = delta / 1000;
 
+    // ── Photo Mode Free Orbit Camera ──
+    if (this.photoMode) {
+      const cx = char.position.x + this.photoDistance * Math.sin(this.photoAzimuth) * Math.cos(this.photoElevation);
+      const cy = char.position.y + 1.2 + this.photoDistance * Math.sin(this.photoElevation);
+      const cz = char.position.z + this.photoDistance * Math.cos(this.photoAzimuth) * Math.cos(this.photoElevation);
+
+      this.camera.position.set(cx, cy, cz);
+      const lookTarget = Experience._tempLookTarget.set(char.position.x, char.position.y + 1.2, char.position.z);
+      this.cameraLookAt.copy(lookTarget);
+      this.camera.lookAt(lookTarget);
+      return;
+    }
+
     const isStreet = !!this.world.streetGroup.parent;
 
     if (isStreet) {
-      const moveZ = this.character.direction.z; // positive when moving South (+Z)
-      const isMoving = this.character.isMoving;
+      // ── AAA Third-Person Perspective (TPP) Camera Behind the Character ──
+      // Target camera angle: positioned behind character's facing direction
+      const charFacing = this.character.targetRotY;
+      const desiredCamAngle = charFacing - Math.PI;
 
-      if (isMoving && moveZ > 0.3) {
-        Experience._tempDesiredOffset.set(0, 9.2, 4.8);
-        Experience._tempDesiredLookOffset.set(0, 0.8, 3.8);
-      } else if (isMoving && moveZ < -0.3) {
-        Experience._tempDesiredOffset.set(0, 7.5, 9.2);
-        Experience._tempDesiredLookOffset.set(0, 0.8, -2.5);
-      } else {
-        Experience._tempDesiredOffset.set(0, 7.8, 8.5);
-        Experience._tempDesiredLookOffset.set(0, 1.0, 0);
-      }
+      // Shortest angular difference wrapping [-PI, PI]
+      let diff = desiredCamAngle - this.cameraYaw;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+
+      // Smooth exponential angular dampening (silky smooth arc with zero jitter)
+      const turnDamp = 1 - Math.exp(-3.5 * dt);
+      this.cameraYaw += diff * turnDamp;
+
+      // AAA 3rd-person trailing geometry
+      const dist = 7.5;
+      const height = 4.0;
+      const lookDist = 2.0;
+
+      const camOffsetX = Math.sin(this.cameraYaw) * dist;
+      const camOffsetZ = Math.cos(this.cameraYaw) * dist;
+      const lookOffsetX = -Math.sin(this.cameraYaw) * lookDist;
+      const lookOffsetZ = -Math.cos(this.cameraYaw) * lookDist;
+
+      Experience._tempDesiredOffset.set(camOffsetX, height, camOffsetZ);
+      Experience._tempDesiredLookOffset.set(lookOffsetX, 1.25, lookOffsetZ);
 
       // Grand framing near Contact Plaza (Z < -90)
       if (char.position.z < -90) {
-        Experience._tempDesiredOffset.y += 1.2;
+        Experience._tempDesiredOffset.y += 1.0;
       }
     } else {
       Experience._tempDesiredOffset.set(0, 3.4, 4.8);
       Experience._tempDesiredLookOffset.set(0, 1.2, 0);
+      this.cameraYaw = 0;
     }
 
-    // Smooth lerp camera offset for fluid movement
-    this.currentCameraOffset.lerp(Experience._tempDesiredOffset, Math.min(1, 4.5 * dt));
-
-    const target = Experience._tempTarget.copy(char.position).add(this.currentCameraOffset);
+    // Direct smoothed target calculation with spring dampening
+    const target = Experience._tempTarget.copy(char.position).add(Experience._tempDesiredOffset);
 
     if (!isStreet) {
       target.x = THREE.MathUtils.clamp(target.x, -3.5, 3.5);
@@ -617,7 +756,7 @@ export class Experience extends EventEmitter {
 
     // Smooth camera lookAt targeting character + directional offset
     const lookTarget = Experience._tempLookTarget.copy(char.position).add(Experience._tempDesiredLookOffset);
-    this.cameraLookAt.lerp(lookTarget, Math.min(1, 6 * dt));
+    this.cameraLookAt.lerp(lookTarget, Math.min(1, 8.0 * dt));
     this.camera.lookAt(this.cameraLookAt);
   }
 

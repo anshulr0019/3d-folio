@@ -35,6 +35,7 @@ export class Character {
   speed = 6.0;
   runSpeed = 11.0;
   direction = new THREE.Vector3(0, 0, -1);
+  velocity = new THREE.Vector3(0, 0, 0);
   isMoving = false;
   isRunning = false;
   
@@ -524,19 +525,15 @@ export class Character {
     this.isRunning = isRunning && this.isMoving;
 
     if (this.isMoving) {
-      const cos = Math.cos(cameraYaw);
-      const sin = Math.sin(cameraYaw);
-      const worldX = moveX * cos - moveZ * sin;
-      const worldZ = moveX * sin + moveZ * cos;
-
-      const len = Math.sqrt(worldX * worldX + worldZ * worldZ);
-      const nx = worldX / len;
-      const nz = worldZ / len;
+      const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
+      const nx = moveX / len;
+      const nz = moveZ / len;
 
       this.group.position.x += nx * spd * dt;
       this.group.position.z += nz * spd * dt;
+      this.velocity.set(nx * spd, this.jumpVelocity, nz * spd);
 
-      // Face movement direction
+      // Face movement direction smoothly
       this.targetRotY = Math.atan2(nx, nz);
       this.direction.set(nx, 0, nz);
 
@@ -560,6 +557,7 @@ export class Character {
         }
       }
     } else {
+      this.velocity.set(0, this.jumpVelocity, 0);
       this.currentTiltX = THREE.MathUtils.lerp(this.currentTiltX, 0, dt * 8);
       this.stepTimer = 0;
 

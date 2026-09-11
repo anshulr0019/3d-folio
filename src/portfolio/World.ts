@@ -2,6 +2,9 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import gsap from "gsap";
 import { WeatherSystem, WeatherType } from "./Weather";
+import { PhysicsPropsSystem } from "./PhysicsProps";
+import { CollectiblesSystem } from "./Collectibles";
+import { StudioCompanion } from "./StudioCompanion";
 
 // ─────────────────────────────────────────────
 // Utilities
@@ -233,6 +236,38 @@ function createSoothingWallTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+let _cachedGrassLawnTex: THREE.CanvasTexture | null = null;
+function createGrassLawnTexture(): THREE.CanvasTexture {
+  if (_cachedGrassLawnTex) return _cachedGrassLawnTex;
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+
+  // 1. Uniform lush garden green base (NO directional gradient to ensure 100% seamless tiling)
+  ctx.fillStyle = "#15803d";
+  ctx.fillRect(0, 0, 256, 256);
+
+  // 2. Fine isotropic micro-grain noise for natural texture without visible seams
+  const imgData = ctx.getImageData(0, 0, 256, 256);
+  const data = imgData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const n = (Math.random() - 0.5) * 10;
+    data[i] = Math.min(255, Math.max(0, data[i] + n * 0.5));
+    data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + n));
+    data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + n * 0.4));
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(12, 96);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  _cachedGrassLawnTex = tex;
+  return tex;
+}
+
 function createAsphaltTexture(): THREE.CanvasTexture {
   if (_cachedAsphaltTex) return _cachedAsphaltTex;
   const canvas = document.createElement("canvas");
@@ -419,6 +454,9 @@ export class World {
 
   interactiveObjects: THREE.Object3D[] = [];
   floatingBillboards: THREE.Group[] = [];
+  physicsProps: PhysicsPropsSystem;
+  collectibles: CollectiblesSystem;
+  companion: StudioCompanion | null = null;
 
   private skydome: THREE.Mesh | null = null;
   private ambientLight: THREE.AmbientLight | null = null;
@@ -453,10 +491,21 @@ export class World {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.weather = new WeatherSystem(scene);
+    this.physicsProps = new PhysicsPropsSystem(scene);
+    this.collectibles = new CollectiblesSystem();
+
     this.buildSkyDome();
     this.buildLights();
     this.buildRoom();
     this.buildStreet();
+
+    this.physicsProps.buildRoomProps(this.roomGroup);
+    this.physicsProps.buildStreetProps(this.streetGroup);
+    this.collectibles.buildGems(this.roomGroup, this.streetGroup);
+
+    this.companion = new StudioCompanion(this.roomGroup);
+    this.interactiveObjects.push(this.companion.group);
+
     this.createCharacterShadow();
     this.activateRoom();
     this.buildAmbientDust();
@@ -539,7 +588,7 @@ export class World {
       const phi = Math.random() * Math.PI * 0.35;
       const theta = Math.random() * Math.PI * 2;
       const r = 210;
-      starPos[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+      starPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
       starPos[i * 3 + 1] = r * Math.cos(phi);
       starPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
     }
@@ -1418,7 +1467,12 @@ export class World {
       map: sidewalkTex,
       roughness: 0.65,
     });
-    const grassMat = new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.85 });
+    const grassTex = createGrassLawnTexture();
+    const grassMat = new THREE.MeshStandardMaterial({
+      map: grassTex,
+      roughness: 0.85,
+      metalness: 0.05,
+    });
 
     // Road
     const road = new THREE.Mesh(new THREE.PlaneGeometry(16, 260), this.dryRoadMat);
@@ -1490,7 +1544,7 @@ export class World {
       { id: "about", label: "About Me", color: 0xec4899, x: -14, z: -20 },
       { id: "skills", label: "Skills", color: 0x10b981, x: 14, z: -38 },
       { id: "projects", label: "Projects", color: 0xf59e0b, x: -14, z: -58 },
-      { id: "experience", label: "Experience", color: 0x6366f1, x: 14, z: -76 },
+      { id: "experience", label: "Education", color: 0x6366f1, x: 14, z: -76 },
     ];
     houseData.forEach((h) => {
       this.buildHouse(g, h.id, h.label, h.color, h.x, h.z);
@@ -1516,18 +1570,16 @@ export class World {
     // Low-poly 3D Instanced Grass Tufts covering the entire green lawn
     this.buildGrassTufts(g);
 
-    // Bushes (optimized coverage across green lawn borders & between houses)
+    // Bushes strictly on outer green lawns (|X| >= 18.0) - ZERO encroachment on sidewalks
     const bushPositions = [
-      { x: -9.2, z: 6 }, { x: 9.2, z: 6 },
-      { x: -9.2, z: -4 }, { x: 9.2, z: -4 },
-      { x: -13.5, z: -10 }, { x: 13.5, z: -10 },
-      { x: -18.0, z: -16 }, { x: 18.0, z: -16 },
-      { x: -13.2, z: -28 }, { x: 13.2, z: -28 },
-      { x: -19.0, z: -32 }, { x: 19.0, z: -32 },
-      { x: -15.5, z: -50 }, { x: 15.5, z: -50 },
-      { x: -13.2, z: -66 }, { x: 13.2, z: -66 },
-      { x: -19.5, z: -70 }, { x: 19.5, z: -70 },
-      { x: -16.0, z: -88 }, { x: 16.0, z: -88 },
+      { x: -18.5, z: 4 }, { x: 18.5, z: 4 },
+      { x: -19.0, z: -8 }, { x: 19.0, z: -8 },
+      { x: -21.0, z: -18 }, { x: 21.0, z: -18 },
+      { x: -19.5, z: -30 }, { x: 19.5, z: -30 },
+      { x: -20.0, z: -46 }, { x: 20.0, z: -46 },
+      { x: -19.5, z: -64 }, { x: 19.5, z: -64 },
+      { x: -21.0, z: -82 }, { x: 21.0, z: -82 },
+      { x: -18.5, z: -100 }, { x: 18.5, z: -100 },
     ];
     bushPositions.forEach((bp) => this.buildBush(g, bp.x, bp.z));
 
@@ -1556,12 +1608,17 @@ export class World {
   }
 
   private buildProjectBillboards(g: THREE.Group) {
-    const projectConfigs = [
-      { project: CONTENT.projects[0], color: "#38bdf8", x: -8.6, z: -20, rotY: Math.PI / 5 },
-      { project: CONTENT.projects[1], color: "#ec4899", x: 8.6, z: -38, rotY: -Math.PI / 5 },
-      { project: CONTENT.projects[2], color: "#10b981", x: -8.6, z: -58, rotY: Math.PI / 5 },
-      { project: CONTENT.projects[3], color: "#f59e0b", x: 8.6, z: -76, rotY: -Math.PI / 5 },
+    const billboardSlots = [
+      { color: "#38bdf8", x: -8.6, z: -20, rotY: Math.PI / 5 },
+      { color: "#ec4899", x: 8.6, z: -38, rotY: -Math.PI / 5 },
+      { color: "#10b981", x: -8.6, z: -58, rotY: Math.PI / 5 },
+      { color: "#f59e0b", x: 8.6, z: -76, rotY: -Math.PI / 5 },
     ];
+
+    const projectConfigs = CONTENT.projects.map((project, i) => ({
+      project,
+      ...billboardSlots[i % billboardSlots.length],
+    }));
 
     projectConfigs.forEach((cfg) => {
       const bGroup = new THREE.Group();
@@ -1674,10 +1731,10 @@ export class World {
     sign.rotation.y = houseRY;
     g.add(sign);
 
-    // Glowing Portal Ring directly on Sidewalk for smooth interaction
-    const zoneX = x < 0 ? -10.5 : 10.5;
+    // Glowing Portal Ring directly on Road in front of House Gate for smooth interaction
+    const zoneX = x < 0 ? -5.5 : 5.5;
     const zoneZ = z;
-    const ringGeo = new THREE.TorusGeometry(2.2, 0.12, 12, 32);
+    const ringGeo = new THREE.TorusGeometry(2.4, 0.12, 12, 32);
     const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
     const ring = new THREE.Mesh(ringGeo, ringMat);
     ring.rotation.x = Math.PI / 2;
@@ -1690,7 +1747,7 @@ export class World {
       label,
       color,
       position: new THREE.Vector3(zoneX, 0, zoneZ),
-      radius: 3.8,
+      radius: 4.2,
     });
   }
 
@@ -1779,32 +1836,66 @@ export class World {
   }
 
   private buildBush(g: THREE.Group, x: number, z: number) {
+    const bushGroup = new THREE.Group();
+    bushGroup.position.set(x, 0, z);
+    bushGroup.rotation.y = seededRandom(x + 7, z + 3) * Math.PI * 2;
+    const scale = 0.85 + seededRandom(x, z) * 0.35;
+    bushGroup.scale.setScalar(scale);
+
+    // 1. Solid internal foliage core filling the hollow interior
+    const coreMat = new THREE.MeshStandardMaterial({
+      color: 0x14532d,
+      roughness: 0.85,
+      metalness: 0.05,
+    });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 10), coreMat);
+    core.scale.set(1.15, 0.8, 1.15);
+    core.position.set(0, 0.5, 0);
+    bushGroup.add(core);
+
+    // 2. Load GLTF outer leaf shell with DoubleSide material
     this.loadModelCached(
       "/models/bush.glb",
       (bushModel, size) => {
-        const targetHeight = 1.2 * (0.8 + seededRandom(x, z) * 0.4);
-        const scaleFactor = targetHeight / (size.y || 1.2);
+        const targetHeight = 1.3;
+        const scaleFactor = targetHeight / (size.y || 1.3);
         bushModel.scale.setScalar(scaleFactor);
-        bushModel.position.set(x, 0, z);
-        bushModel.rotation.y = seededRandom(x + 7, z + 3) * Math.PI * 2;
+        bushModel.position.set(0, 0, 0);
 
         bushModel.traverse((c) => {
           if ((c as THREE.Mesh).isMesh) {
-            c.castShadow = true;
-            c.receiveShadow = false;
+            const mesh = c as THREE.Mesh;
+            mesh.castShadow = true;
+            mesh.receiveShadow = false;
+            if (mesh.material) {
+              if (Array.isArray(mesh.material)) {
+                mesh.material.forEach((m) => {
+                  m.side = THREE.DoubleSide;
+                });
+              } else {
+                mesh.material.side = THREE.DoubleSide;
+              }
+            }
           }
         });
-        g.add(bushModel);
+        bushGroup.add(bushModel);
       },
       () => {
-        const bush = new THREE.Mesh(
-          new THREE.SphereGeometry(0.85, 8, 8),
-          new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.9 })
-        );
-        bush.position.set(x, 0.4, z);
-        g.add(bush);
+        // Fallback procedural stylized bush cluster
+        const pMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.8 });
+        const sphere1 = new THREE.Mesh(new THREE.SphereGeometry(0.65, 10, 8), pMat);
+        sphere1.position.set(0, 0.5, 0);
+        bushGroup.add(sphere1);
+        const sphere2 = new THREE.Mesh(new THREE.SphereGeometry(0.45, 8, 8), pMat);
+        sphere2.position.set(0.35, 0.4, 0.2);
+        bushGroup.add(sphere2);
+        const sphere3 = new THREE.Mesh(new THREE.SphereGeometry(0.45, 8, 8), pMat);
+        sphere3.position.set(-0.35, 0.4, -0.2);
+        bushGroup.add(sphere3);
       }
     );
+
+    g.add(bushGroup);
   }
 
   private buildLampPost(g: THREE.Group, x: number, z: number) {
@@ -1914,8 +2005,8 @@ export class World {
     this.addContactShadow(g, 0, plazaZ, 8.8);
 
     // Flanking torch lamp posts at entry of plaza
-this.buildLampPost(g, -6.8, -98);
-      this.buildLampPost(g, 6.8, -98);
+    this.buildLampPost(g, -6.8, -98);
+    this.buildLampPost(g, 6.8, -98);
 
     // ── Central Hero Statue ──
     const base1 = new THREE.Mesh(
@@ -2176,100 +2267,158 @@ this.buildLampPost(g, -6.8, -98);
       { x: 0, z: -105, r: 8.5 }, // Contact Monument Plaza
     ];
 
-    const populateGrass = (geo: THREE.BufferGeometry, mat: THREE.Material, count: number) => {
-      const instancedGrass = new THREE.InstancedMesh(geo, mat, count);
-      const dummy = new THREE.Object3D();
-      let idx = 0;
+    // ── 1. Create Lush 3D Grass Blade Geometry with Root-to-Tip Vertex Color Gradient ──
+    const bladeGeo = new THREE.BufferGeometry();
+    const positions: number[] = [];
+    const colors: number[] = [];
 
-      for (let i = 0; i < count; i++) {
+    const numBlades = 5;
+    const colBase = new THREE.Color(0x14532d); // Earthy dark green root
+    const colMid = new THREE.Color(0x22c55e);  // Vibrant emerald body
+    const colTip = new THREE.Color(0xa3e635);  // Sunlit golden-green tip
+
+    for (let b = 0; b < numBlades; b++) {
+      const angle = (b / numBlades) * Math.PI * 2;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const h = 0.52 + (b % 3) * 0.12;
+      const w = 0.14;
+      const lean = 0.15; // Natural outward spread
+
+      const x0 = -w * cos, z0 = -w * sin;
+      const x1 = w * cos, z1 = w * sin;
+      const x2 = -w * 0.6 * cos + sin * lean, z2 = -w * 0.6 * sin - cos * lean, y2 = h * 0.55;
+      const x3 = w * 0.6 * cos + sin * lean, z3 = w * 0.6 * sin - cos * lean, y3 = h * 0.55;
+      const x4 = sin * lean * 1.5, z4 = -cos * lean * 1.5, y4 = h; // Curved blade tip
+
+      const pushV = (p: number[], c: THREE.Color) => {
+        positions.push(p[0], p[1], p[2]);
+        colors.push(c.r, c.g, c.b);
+      };
+
+      // Lower quad (2 triangles)
+      pushV([x0, 0, z0], colBase); pushV([x1, 0, z1], colBase); pushV([x2, y2, z2], colMid);
+      pushV([x1, 0, z1], colBase); pushV([x3, y3, z3], colMid); pushV([x2, y2, z2], colMid);
+      // Upper triangle to sharp tip
+      pushV([x2, y2, z2], colMid); pushV([x3, y3, z3], colMid); pushV([x4, y4, z4], colTip);
+
+      // Back-face triangles for solid DoubleSide illumination
+      pushV([x0, 0, z0], colBase); pushV([x2, y2, z2], colMid); pushV([x1, 0, z1], colBase);
+      pushV([x1, 0, z1], colBase); pushV([x2, y2, z2], colMid); pushV([x3, y3, z3], colMid);
+      pushV([x2, y2, z2], colMid); pushV([x4, y4, z4], colTip); pushV([x3, y3, z3], colMid);
+    }
+
+    bladeGeo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    bladeGeo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    bladeGeo.computeVertexNormals();
+
+    const grassMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.6,
+      metalness: 0.05,
+      side: THREE.DoubleSide,
+    });
+
+    const grassCount = 1200;
+    const instancedGrass = new THREE.InstancedMesh(bladeGeo, grassMat, grassCount);
+    const dummy = new THREE.Object3D();
+    let grassIdx = 0;
+
+    for (let i = 0; i < grassCount; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const x = side * (14.8 + seededRandom(i * 3.1, i * 7.7) * 16.5);
+      const z = 8 - seededRandom(i * 5.3, i * 2.9) * 132;
+
+      // Skip near house footprints & plaza
+      let skip = false;
+      for (const h of houses) {
+        const dx = x - h.x;
+        const dz = z - h.z;
+        if (dx * dx + dz * dz < (h.r + 0.8) * (h.r + 0.8)) {
+          skip = true;
+          break;
+        }
+      }
+      if (skip) continue;
+
+      const scale = 0.65 + seededRandom(i, x) * 0.55;
+      const rotY = seededRandom(x, z) * Math.PI * 2;
+
+      dummy.position.set(x, 0, z);
+      dummy.rotation.set(0, rotY, (seededRandom(z, x) - 0.5) * 0.15);
+      dummy.scale.set(scale, scale * (0.85 + seededRandom(i, z) * 0.35), scale);
+      dummy.updateMatrix();
+
+      instancedGrass.setMatrixAt(grassIdx++, dummy.matrix);
+    }
+    instancedGrass.instanceMatrix.needsUpdate = true;
+    g.add(instancedGrass);
+
+    // ── 2. Scattered Low-Poly Wildflowers (Dandelions, Daisies, Lavender) ──
+    const flowerGeo = new THREE.DodecahedronGeometry(0.12);
+    const flowerColors = [0xfacc15, 0xf8fafc, 0xc084fc, 0xf472b6];
+    flowerColors.forEach((fCol, colIdx) => {
+      const fMat = new THREE.MeshStandardMaterial({
+        color: fCol,
+        roughness: 0.4,
+        emissive: fCol,
+        emissiveIntensity: 0.25,
+      });
+      const fCount = 45;
+      const fInst = new THREE.InstancedMesh(flowerGeo, fMat, fCount);
+      let fIdx = 0;
+
+      for (let i = 0; i < fCount; i++) {
         const side = i % 2 === 0 ? -1 : 1;
-        // Strictly place grass on the outer green lawns (|X| >= 15.5) so road (X: -8 to 8) and sidewalk (X: -13 to 13) stay 100% clean
-        const x = side * (15.5 + seededRandom(i * 3.1, i * 7.7) * 20);
-        const z = 8 - seededRandom(i * 5.3, i * 2.9) * 135;
+        const seed = i + colIdx * 50;
+        const x = side * (15.2 + seededRandom(seed * 2.3, seed * 4.1) * 14.0);
+        const z = 6 - seededRandom(seed * 3.7, seed * 1.9) * 125;
 
-        // Skip if inside house bounds
-        let insideHouse = false;
-        for (const house of houses) {
-          const dx = x - house.x;
-          const dz = z - house.z;
-          if (dx * dx + dz * dz < house.r * house.r) {
-            insideHouse = true;
+        let skip = false;
+        for (const h of houses) {
+          const dx = x - h.x;
+          const dz = z - h.z;
+          if (dx * dx + dz * dz < (h.r + 0.8) * (h.r + 0.8)) {
+            skip = true;
             break;
           }
         }
-        if (insideHouse) continue;
+        if (skip) continue;
 
-        const scale = 0.55 + seededRandom(i, x) * 0.45;
-        const rotY = seededRandom(x, z) * Math.PI * 2;
-
-        dummy.position.set(x, 0, z);
-        dummy.rotation.set(0, rotY, (seededRandom(z, x) - 0.5) * 0.1);
-        dummy.scale.set(scale, scale * (0.8 + seededRandom(i, z) * 0.3), scale);
+        dummy.position.set(x, 0.35 + seededRandom(x, z) * 0.15, z);
+        dummy.rotation.set(seededRandom(z, x) * 0.3, seededRandom(x, z) * Math.PI, 0);
+        dummy.scale.setScalar(0.85 + seededRandom(seed, x) * 0.4);
         dummy.updateMatrix();
 
-        instancedGrass.setMatrixAt(idx++, dummy.matrix);
+        fInst.setMatrixAt(fIdx++, dummy.matrix);
       }
+      fInst.instanceMatrix.needsUpdate = true;
+      g.add(fInst);
+    });
 
-      instancedGrass.instanceMatrix.needsUpdate = true;
-      g.add(instancedGrass);
-    };
+    // ── 3. Smooth Garden Landscape Rocks ──
+    const rockGeo = new THREE.DodecahedronGeometry(0.55);
+    const rockMat = new THREE.MeshStandardMaterial({
+      color: 0x475569,
+      roughness: 0.8,
+      metalness: 0.1,
+    });
+    const rockCount = 20;
+    const rockInst = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
+    let rIdx = 0;
 
-    // Load grass.glb model from assets and normalize its geometry
-    this.loadModelCached(
-      "/models/grass.glb",
-      (grassModel) => {
-        let grassGeo: THREE.BufferGeometry | null = null;
-        let grassMat: THREE.Material | null = null;
-
-        grassModel.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh && !grassGeo) {
-            const mesh = child as THREE.Mesh;
-            grassGeo = mesh.geometry.clone();
-            grassMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-          }
-        });
-
-        if (grassGeo && grassMat) {
-          (grassGeo as THREE.BufferGeometry).computeBoundingBox();
-          const box = (grassGeo as THREE.BufferGeometry).boundingBox || new THREE.Box3();
-          const sizeY = box.max.y - box.min.y || 1;
-          const center = new THREE.Vector3();
-          box.getCenter(center);
-
-          // Center geometry horizontally and align bottom to Y = 0
-          (grassGeo as THREE.BufferGeometry).translate(-center.x, -box.min.y, -center.z);
-
-          const targetH = 0.5;
-          const scaleF = targetH / sizeY;
-          (grassGeo as THREE.BufferGeometry).scale(scaleF, scaleF, scaleF);
-
-          // Render 400 instances strictly on green lawns
-          populateGrass(grassGeo, grassMat, 400);
-        }
-      },
-      () => {
-        // Procedural fallback
-        const bladeGeo = new THREE.BufferGeometry();
-        const verts: number[] = [];
-        const numBlades = 3;
-        for (let b = 0; b < numBlades; b++) {
-          const angle = (b * Math.PI) / numBlades;
-          const cos = Math.cos(angle);
-          const sin = Math.sin(angle);
-          const w = 0.16, h = 0.5, tw = 0.03;
-          const x0 = -w * cos, z0 = -w * sin;
-          const x1 =  w * cos, z1 =  w * sin;
-          const x2 =  tw * cos, z2 =  tw * sin;
-          const x3 = -tw * cos, z3 = -tw * sin;
-          verts.push(x0,0,z0, x1,0,z1, x2,h,z2, x0,0,z0, x2,h,z2, x3,h,z3);
-          verts.push(x1,0,z1, x0,0,z0, x2,h,z2, x2,h,z2, x0,0,z0, x3,h,z3);
-        }
-        bladeGeo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
-        bladeGeo.computeVertexNormals();
-        const fallbackMat = new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.8, side: THREE.DoubleSide });
-        populateGrass(bladeGeo, fallbackMat, 350);
-      }
-    );
+    const treeZs = [-6, -20, -38, -58, -76, -96, -114];
+    treeZs.forEach((tz, tIdx) => {
+      [-15.2, 15.2].forEach((tx) => {
+        dummy.position.set(tx + (tIdx % 2 === 0 ? 0.8 : -0.8), 0.22, tz + 1.2);
+        dummy.rotation.set(tIdx, tIdx * 1.2, tIdx * 0.8);
+        dummy.scale.set(1.2, 0.65, 1.0);
+        dummy.updateMatrix();
+        rockInst.setMatrixAt(rIdx++, dummy.matrix);
+      });
+    });
+    rockInst.instanceMatrix.needsUpdate = true;
+    g.add(rockInst);
   }
 
   // ─────────────────────────────────────────────
@@ -2324,9 +2473,25 @@ this.buildLampPost(g, -6.8, -98);
     }
   }
 
-  updateRings(t: number, dt: number = 0.016) {
+  updateRings(
+    t: number,
+    dt: number = 0.016,
+    charPos?: THREE.Vector3,
+    charVel?: THREE.Vector3,
+    isSprinting: boolean = false
+  ) {
     const isStreet = !!this.streetGroup.parent;
     const isRoom = !!this.roomGroup.parent;
+    const loc: "room" | "street" = isStreet ? "street" : "room";
+
+    if (charPos && charVel) {
+      this.physicsProps.update(charPos, charVel, isSprinting, dt, loc);
+      this.collectibles.update(t, charPos, loc);
+    }
+
+    if (isRoom && this.companion && charPos) {
+      this.companion.update(t, charPos);
+    }
 
     if (isStreet) {
       this.weather.update(dt);

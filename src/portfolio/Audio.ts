@@ -173,6 +173,117 @@ export class SoundSystem {
     }
   }
 
+  playCollect() {
+    if (this.muted) return;
+    this.initCtx();
+    if (!this.ctx) return;
+
+    try {
+      // Arpeggio crystal sparkle chord: C6, E6, G6, B6, C7
+      const notes = [1046.5, 1318.5, 1567.98, 1975.53, 2093.0];
+      notes.forEach((freq, idx) => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, this.ctx!.currentTime + idx * 0.05);
+
+        gain.gain.setValueAtTime(0.08, this.ctx!.currentTime + idx * 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.0001, this.ctx!.currentTime + idx * 0.05 + 0.3);
+
+        osc.connect(gain);
+        gain.connect(this.ctx!.destination);
+
+        osc.start(this.ctx!.currentTime + idx * 0.05);
+        osc.stop(this.ctx!.currentTime + idx * 0.05 + 0.35);
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  playKick() {
+    if (this.muted) return;
+    this.initCtx();
+    if (!this.ctx) return;
+
+    try {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(160 + Math.random() * 40, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(35, this.ctx.currentTime + 0.09);
+
+      gain.gain.setValueAtTime(0.12, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.1);
+
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.12);
+    } catch {
+      // ignore
+    }
+  }
+
+  playCameraShutter() {
+    if (this.muted) return;
+    this.initCtx();
+    if (!this.ctx) return;
+
+    try {
+      // Quick camera click
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(800, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(200, this.ctx.currentTime + 0.06);
+
+      gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.08);
+
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.09);
+    } catch {
+      // ignore
+    }
+  }
+
+  playFanfare() {
+    if (this.muted) return;
+    this.initCtx();
+    if (!this.ctx) return;
+
+    try {
+      // Victory celebration fanfare chords
+      const notes = [523.25, 659.25, 783.99, 1046.5];
+      notes.forEach((freq, idx) => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(freq, this.ctx!.currentTime + idx * 0.1);
+
+        gain.gain.setValueAtTime(0.1, this.ctx!.currentTime + idx * 0.1);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx!.currentTime + idx * 0.1 + 0.5);
+
+        osc.connect(gain);
+        gain.connect(this.ctx!.destination);
+
+        osc.start(this.ctx!.currentTime + idx * 0.1);
+        osc.stop(this.ctx!.currentTime + idx * 0.1 + 0.6);
+      });
+    } catch {
+      // ignore
+    }
+  }
+
   playBeep(freq: number, duration: number = 0.1, type: OscillatorType = "square") {
     if (this.muted) return;
     this.initCtx();
