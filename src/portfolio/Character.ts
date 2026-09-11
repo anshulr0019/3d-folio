@@ -39,7 +39,7 @@ export class Character {
   isMoving = false;
   isRunning = false;
   
-  private targetRotY = 0;
+  targetRotY = Math.PI;
   private currentTiltX = 0;
   private dustParticles: THREE.Mesh[] = [];
   private stepTimer = 0;
@@ -57,6 +57,7 @@ export class Character {
     this.group.add(this.gltfGroup);
     this.scene.add(this.group);
     this.group.position.set(0, 0, 3);
+    this.setRotationY(Math.PI);
 
     this.loadCharacterModel();
   }
@@ -467,9 +468,18 @@ export class Character {
   private isGrounded = true;
   private posY = 0;
 
-  setPosition(x: number, y: number, z: number) {
+  setPosition(x: number, y: number, z: number, rotY?: number) {
     this.group.position.set(x, y, z);
     this.posY = y;
+    if (rotY !== undefined) {
+      this.setRotationY(rotY);
+    }
+  }
+
+  setRotationY(rotY: number) {
+    this.targetRotY = rotY;
+    this.group.rotation.y = rotY;
+    this.direction.set(Math.sin(rotY), 0, Math.cos(rotY));
   }
 
   update(

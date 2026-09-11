@@ -282,7 +282,7 @@ export class Experience extends EventEmitter {
     this.cinematicTimeline = gsap.timeline({
       onComplete: () => {
         this.isCinematicDone = true;
-        this.character.group.position.set(0, 0, 3);
+        this.character.setPosition(0, 0, 3, Math.PI);
         this.setState("INTRO");
         this.emit("cinematicEnd");
       }
@@ -335,7 +335,7 @@ export class Experience extends EventEmitter {
     this.bloomPass.strength = 0.7;
 
     this.isCinematicDone = true;
-    this.character.group.position.set(0, 0, 3);
+    this.character.setPosition(0, 0, 3, Math.PI);
     this.setState("INTRO");
     this.emit("cinematicEnd");
   }
@@ -370,7 +370,12 @@ export class Experience extends EventEmitter {
       this.scene.fog = new THREE.Fog(skyColor, 40, 180);
       gsap.to(this.bloomPass, { strength: 0.4, duration: 0.8, ease: "power2.out" });
 
-      this.character.setPosition(0, 0, 8);
+      this.character.setPosition(0, 0, 8, Math.PI);
+      this.cameraYaw = 0;
+      this.cameraVelocity.set(0, 0, 0);
+      this.camera.position.set(0, 4.0, 15.5);
+      this.cameraLookAt.set(0, 1.25, 6.0);
+      this.camera.lookAt(this.cameraLookAt);
       this.cameraOffset.copy(this.streetCameraOffset);
 
       this.world.fadeIn(0.5, () => {
@@ -395,8 +400,12 @@ export class Experience extends EventEmitter {
       // Restore room bloom level
       gsap.to(this.bloomPass, { strength: 0.7, duration: 0.8, ease: "power2.out" });
 
-      this.character.setPosition(0, 0, 3);
+      this.character.setPosition(0, 0, 3, Math.PI);
       this.cameraOffset.copy(this.roomCameraOffset);
+      this.cameraVelocity.set(0, 0, 0);
+      this.camera.position.set(0, 3.4, 7.8);
+      this.cameraLookAt.set(0, 1.4, 0);
+      this.camera.lookAt(this.cameraLookAt);
 
       this.world.fadeIn(0.5, () => {
         this.setState("ROOM");
