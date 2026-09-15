@@ -19,6 +19,8 @@ export class EventEmitter {
     this._events[event].forEach((cb) => cb(...args));
   }
 
+  removeAllListeners() { this._events = {}; }
+
   once(event: string, cb: Callback) {
     const unsub = this.on(event, (...args) => {
       unsub();

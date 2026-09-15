@@ -3,13 +3,15 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { World, Zone, DayNightMode, InteractiveObjectData } from "./World";
+import { World, Zone, InteractiveObjectData } from "./World";
 import { Character } from "./Character";
 import { EventEmitter } from "./EventEmitter";
 import { sound } from "./Audio";
 import { WeatherType } from "./Weather";
 import { CONTENT } from "./content";
 import gsap from "gsap";
+import { resolveQuality, SETTINGS, type Quality, type RenderQuality } from "./quality";
+import { disposeObject } from "./dispose";
 
 export type GameState =
   | "LOADING"
@@ -54,8 +56,8 @@ export class Experience extends EventEmitter {
   character!: Character;
 
   // Post-processing
-  private composer!: EffectComposer;
-  private bloomPass!: UnrealBloomPass;
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
 
   state: GameState = "LOADING";
 
@@ -75,7 +77,6 @@ export class Experience extends EventEmitter {
   // Camera offsets – high 3/4 elevated isometric perspective with directional bias
   private roomCameraOffset = new THREE.Vector3(0, 3.4, 4.8);
   private streetCameraOffset = new THREE.Vector3(0, 7.8, 8.5);
-  private currentCameraOffset = new THREE.Vector3(0, 7.8, 8.5);
   private cameraOffset = new THREE.Vector3(0, 3.4, 4.8);
   private cameraLookAt = new THREE.Vector3(0, 1.4, 0);
   private cameraYaw = 0;
@@ -106,15 +107,33 @@ export class Experience extends EventEmitter {
   private konamiSequence = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight", "KeyB", "KeyA"];
   private currentKonamiIdx = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
+  quality: RenderQuality;
+  fps = 0;
+  private autoQuality: boolean;
+  private disposed = false;
+  private listeners = new AbortController();
+  private resizeObserver: ResizeObserver;
+  private sampleStart = 0;
+  private sampleFrames = 0;
+  private slowSamples = 0;
+  private partyInterval: ReturnType<typeof setInterval> | null = null;
+  private loadingManager = new THREE.LoadingManager();
+
+  private listen<K extends keyof (WindowEventMap & DocumentEventMap & HTMLElementEventMap & { webglcontextlost: Event })>(target: EventTarget, type: K, listener: (event: (WindowEventMap & DocumentEventMap & HTMLElementEventMap & { webglcontextlost: Event })[K]) => void, options: AddEventListenerOptions = {}) {
+    target.addEventListener(type, listener as EventListener, { ...options, signal: this.listeners.signal });
+  }
+
+  constructor(canvas: HTMLCanvasElement, quality: Quality = "auto") {
     super();
     this.canvas = canvas;
+    this.quality = resolveQuality(quality);
+    this.autoQuality = quality === "auto";
 
     // ── Renderer ──────────────────────────────
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: false,
-      powerPreference: "high-performance",
+      powerPreference: this.quality === "low" ? "low-power" : "default",
     });
     this.renderer.setPixelRatio(1);
 
@@ -135,15 +154,18 @@ export class Experience extends EventEmitter {
     this.camera.position.set(0, 3.8, 7.6);
 
     // ── Post-processing ───────────────────────
-    this.buildPostProcessing(w, h);
+    if (SETTINGS[this.quality].bloom) this.buildPostProcessing(w, h);
 
     // ── Resize ────────────────────────────────
-    const ro = new ResizeObserver(() => this.resize());
-    ro.observe(canvas);
-    window.addEventListener("resize", () => this.resize());
+    this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.resizeObserver.observe(canvas);
+    this.listen(window, "resize", () => this.resize());
 
     // ── Input & Raycast Listeners ─────────────
-    window.addEventListener("keydown", (e) => {
+    this.listen(window, "keydown", (e) => {
+      if (e.target instanceof HTMLElement && (e.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(e.target.tagName))) return;
+      if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+      if (e.repeat) return;
       this.keys.add(e.code);
 
       // KeyE / KeyF: Interact / Open Modal on active zone
@@ -173,10 +195,10 @@ export class Experience extends EventEmitter {
 
       this.emit("keydown", e.code);
     });
-    window.addEventListener("keyup", (e) => this.keys.delete(e.code));
+    this.listen(window, "keyup", (e) => this.keys.delete(e.code));
 
     // Pointer hover & Photo Mode drag tracking
-    canvas.addEventListener("pointermove", (e: PointerEvent) => {
+    this.listen(canvas, "pointermove", (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
       this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -199,22 +221,27 @@ export class Experience extends EventEmitter {
     });
 
     // Pointer click on interactive 3D objects / photo drag start
-    canvas.addEventListener("pointerdown", (e: PointerEvent) => {
+    this.listen(canvas, "pointerdown", (e: PointerEvent) => {
       if (this.photoMode) {
         this.isPointerDragging = true;
         this.lastPointerX = e.clientX;
         this.lastPointerY = e.clientY;
-      } else if (this.hoveredObject && (this.state === "ROOM" || this.state === "STREET")) {
+      } else {
+        const rect = canvas.getBoundingClientRect();
+        this.pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+        this.checkRaycastHover(e.clientX, e.clientY);
+      }
+      if (!this.photoMode && this.hoveredObject && (this.state === "ROOM" || this.state === "STREET")) {
         this.handleObjectClick(this.hoveredObject);
       }
     });
 
-    window.addEventListener("pointerup", () => {
+    this.listen(window, "pointerup", () => {
       this.isPointerDragging = false;
     });
 
     // Wheel zoom in Photo Mode
-    canvas.addEventListener("wheel", (e: WheelEvent) => {
+    this.listen(canvas, "wheel", (e: WheelEvent) => {
       if (this.photoMode) {
         this.photoDistance = THREE.MathUtils.clamp(
           this.photoDistance + e.deltaY * 0.005,
@@ -223,6 +250,18 @@ export class Experience extends EventEmitter {
         );
       }
     }, { passive: true });
+    this.listen(window, "blur", () => this.clearInput());
+    this.listen(document, "visibilitychange", () => {
+      this.clearInput();
+      cancelAnimationFrame(this.rafId);
+      if (!document.hidden && !this.disposed) this.startLoop();
+    });
+    this.listen(canvas, "webglcontextlost", (event) => {
+      event.preventDefault();
+      cancelAnimationFrame(this.rafId);
+      this.clearInput();
+      this.emit("contextLost");
+    });
   }
 
   private buildPostProcessing(w: number, h: number) {
@@ -244,22 +283,84 @@ export class Experience extends EventEmitter {
     this.composer.addPass(outputPass);
   }
 
-  async init() {
-    this.world = new World(this.scene);
-    this.character = new Character(this.scene);
+  async init(onProgress: (progress: number) => void = () => {}) {
+    let finish!: () => void;
+    const loaded = new Promise<void>(resolve => { finish = resolve; });
+    this.loadingManager.onProgress = (_url, done, total) => {
+      if (!this.disposed) onProgress(Math.min(90, (done / total) * 90));
+    };
+    this.loadingManager.onLoad = finish;
+    // The sentinel covers procedural-only scenes and nested animation requests.
+    this.loadingManager.itemStart("world");
+    this.world = new World(this.scene, this.quality, this.loadingManager);
+    this.character = new Character(this.scene, this.quality === "high", this.loadingManager);
     this.cameraOffset.copy(this.roomCameraOffset);
-
-    // Forward collectibles events
     this.world.collectibles.onCollectCallback = (gem, count, total) => {
       this.emit("gemCollected", { gem, count, total });
     };
-
+    this.loadingManager.itemEnd("world");
+    await loaded;
+    if (this.disposed) return;
     this.resize();
+    await this.renderer.compileAsync(this.scene, this.camera);
+    if (this.disposed) return;
+    onProgress(100);
     this.setState("LOADING");
     this.startLoop();
-    try {
-      this.renderer.compile(this.scene, this.camera);
-    } catch {}
+  }
+
+  private clearInput() {
+    this.keys.clear();
+    this.joystick.x = this.joystick.y = 0;
+    this.isPointerDragging = false;
+  }
+
+  setQuality(quality: RenderQuality, automatic = false) {
+    if (!automatic) this.autoQuality = false;
+    this.quality = quality;
+    if (SETTINGS[quality].bloom && !this.composer) this.buildPostProcessing(this.canvas.clientWidth, this.canvas.clientHeight);
+    if (!SETTINGS[quality].bloom) this.disposePostProcessing();
+    this.world?.setQuality(quality);
+    this.resize();
+    this.slowSamples = 0;
+    this.emit("qualityChange", quality);
+  }
+
+  private render() {
+    if (this.composer) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
+  }
+
+  respawn() {
+    if (this.state !== "ROOM" && this.state !== "STREET") return;
+    this.clearInput();
+    const isStreet = this.state === "STREET";
+    this.character.setPosition(0, 0, isStreet ? 8 : 3, Math.PI);
+    this.cameraYaw = 0;
+    this.cameraVelocity.set(0, 0, 0);
+    this.camera.position.set(0, 4, isStreet ? 15.5 : 7.8);
+    this.nearestZone = null;
+    this.emit("zoneChange", null);
+  }
+
+  travelTo(destination: "room" | "projects") {
+    if (this.state !== "ROOM" && this.state !== "STREET") return;
+    if (destination === "room") {
+      if (this.state === "STREET") this.enterRoom();
+      else this.respawn();
+    } else {
+      const arrive = () => {
+        const zone = this.world.streetZones.find(zone => zone.id === "projects");
+        if (!zone) return;
+        this.clearInput();
+        this.character.setPosition(zone.position.x, 0, zone.position.z + 2, Math.PI);
+        this.cameraVelocity.set(0, 0, 0);
+        this.camera.position.set(zone.position.x, 5, zone.position.z + 10);
+        this.detectZone();
+      };
+      if (this.state === "ROOM") { this.once("enterStreet", arrive); this.exitRoom(); }
+      else arrive();
+    }
   }
 
   private cinematicTimeline: gsap.core.Timeline | null = null;
@@ -312,7 +413,7 @@ export class Experience extends EventEmitter {
     });
 
     // Pulse bloom strength during flythrough
-    tl.fromTo(this.bloomPass, { strength: 2.2 }, {
+    if (this.bloomPass) tl.fromTo(this.bloomPass, { strength: 2.2 }, {
       strength: 0.85, duration: 3.5, ease: "power2.out"
     }, 0.3);
   }
@@ -325,14 +426,14 @@ export class Experience extends EventEmitter {
     gsap.killTweensOf(this.camera);
     gsap.killTweensOf(this.camera.position);
     gsap.killTweensOf(this.cameraLookAt);
-    gsap.killTweensOf(this.bloomPass);
+    if (this.bloomPass) gsap.killTweensOf(this.bloomPass);
 
     this.camera.fov = 55;
     this.camera.updateProjectionMatrix();
     this.camera.position.set(0, 3.8, 7.6);
     this.cameraLookAt.set(0, 1.2, 0);
     this.camera.lookAt(this.cameraLookAt);
-    this.bloomPass.strength = 0.7;
+    if (this.bloomPass) this.bloomPass.strength = 0.7;
 
     this.isCinematicDone = true;
     this.character.setPosition(0, 0, 3, Math.PI);
@@ -343,13 +444,14 @@ export class Experience extends EventEmitter {
   setWeather(type: WeatherType) {
     this.world?.setWeather(type);
     // Ramp bloom down a touch in rain for realistic look
-    gsap.to(this.bloomPass, {
+    if (this.bloomPass) gsap.to(this.bloomPass, {
       strength: type === "rain" ? 1.1 : 0.85,
       duration: 1.5, ease: "power2.inOut"
     });
   }
 
   setState(s: GameState) {
+    this.clearInput();
     this.state = s;
     this.emit("stateChange", s);
   }
@@ -368,7 +470,7 @@ export class Experience extends EventEmitter {
       const skyColor = new THREE.Color(0x7dd3fc);
       this.scene.background = skyColor;
       this.scene.fog = new THREE.Fog(skyColor, 40, 180);
-      gsap.to(this.bloomPass, { strength: 0.4, duration: 0.8, ease: "power2.out" });
+      if (this.bloomPass) gsap.to(this.bloomPass, { strength: 0.4, duration: 0.8, ease: "power2.out" });
 
       this.character.setPosition(0, 0, 8, Math.PI);
       this.cameraYaw = 0;
@@ -398,7 +500,7 @@ export class Experience extends EventEmitter {
       this.scene.background = new THREE.Color(0x0d0d1a);
       this.scene.fog = new THREE.FogExp2(0x12121e, 0.011);
       // Restore room bloom level
-      gsap.to(this.bloomPass, { strength: 0.7, duration: 0.8, ease: "power2.out" });
+      if (this.bloomPass) gsap.to(this.bloomPass, { strength: 0.7, duration: 0.8, ease: "power2.out" });
 
       this.character.setPosition(0, 0, 3, Math.PI);
       this.cameraOffset.copy(this.roomCameraOffset);
@@ -427,7 +529,13 @@ export class Experience extends EventEmitter {
     if (!this.world?.interactiveObjects?.length) return;
 
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const intersects = this.raycaster.intersectObjects(this.world.interactiveObjects, true);
+    const activeGroup = this.state === "ROOM" ? this.world.roomGroup : this.world.streetGroup;
+    const activeObjects = this.world.interactiveObjects.filter(object => {
+      let node: THREE.Object3D | null = object;
+      while (node) { if (!node.visible) return false; if (node === activeGroup) return true; node = node.parent; }
+      return false;
+    });
+    const intersects = this.raycaster.intersectObjects(activeObjects, true);
 
     let found: InteractiveObjectData | null = null;
     for (let i = 0; i < intersects.length; i++) {
@@ -455,11 +563,12 @@ export class Experience extends EventEmitter {
       const quote = this.world.companion?.interact() || "Beep boop! 🚀";
       this.emit("companionDialogue", quote);
     } else if (data.id === "resume") {
-      window.open("/resume.pdf", "_blank");
+      this.openModal("experience");
     } else if (data.id.startsWith("contact_")) {
-      if (data.id === "contact_linkedin") window.open("https://linkedin.com", "_blank");
-      else if (data.id === "contact_github") window.open("https://github.com", "_blank");
+      if (data.id === "contact_linkedin") window.open(CONTENT.contact.socials[1].url, "_blank", "noopener,noreferrer");
+      else if (data.id === "contact_github") window.open(CONTENT.contact.socials[0].url, "_blank", "noopener,noreferrer");
       else if (data.id === "contact_gmail") window.location.href = `mailto:${CONTENT.contact.email}`;
+      else if (data.id === "contact_phone") window.location.href = `tel:${CONTENT.contact.phone}`;
     } else {
       this.openModal(data.id);
     }
@@ -487,21 +596,15 @@ export class Experience extends EventEmitter {
     sound.playFanfare();
     const colors = [0xec4899, 0x38bdf8, 0xa855f7, 0xfacc15, 0x22c55e];
     let step = 0;
-    const interval = setInterval(() => {
+    if (this.partyInterval) clearInterval(this.partyInterval);
+    this.partyInterval = setInterval(() => {
       const col = colors[step % colors.length];
       if (this.world.roomCeiling) this.world.roomCeiling.color.setHex(col);
       if (this.world.roomWarm) this.world.roomWarm.color.setHex(colors[(step + 2) % colors.length]);
       step++;
-      if (step > 30) clearInterval(interval);
+      if (step > 30 && this.partyInterval) { clearInterval(this.partyInterval); this.world.roomCeiling?.color.setHex(0xa78bfa); this.world.roomWarm?.color.setHex(0x38bdf8); }
     }, 150);
     this.emit("partyMode");
-  }
-
-  toggleDayNight(): DayNightMode {
-    const next = this.world.toggleDayNightMode();
-    ;(sound as any).playClick();
-    this.emit("dayNightChange", next);
-    return next;
   }
 
   openModal(zoneId: string) {
@@ -521,13 +624,34 @@ export class Experience extends EventEmitter {
 
   // ── Main loop ─────────────────────────────
   private startLoop() {
+    cancelAnimationFrame(this.rafId);
     this.lastTime = performance.now();
+    this.sampleStart = this.lastTime;
+    this.sampleFrames = 0;
     const loop = (now: number) => {
+      if (this.disposed || document.hidden) return;
       this.rafId = requestAnimationFrame(loop);
-      const delta = Math.min(now - this.lastTime, 50);
-      this.lastTime = now;
+      if (this.state === "LOADING" || this.state === "MODAL") {
+        this.lastTime = this.sampleStart = now;
+        this.sampleFrames = 0;
+        return;
+      }
+      const interval = 1000 / SETTINGS[this.quality].fps;
+      const elapsed = now - this.lastTime;
+      if (elapsed < interval - 1) return;
+      this.lastTime = now - (elapsed % interval);
+      const delta = Math.min(elapsed, 50);
       this.elapsed += delta;
-      this.update(delta, this.elapsed);
+      try { this.update(delta, this.elapsed); }
+      catch (error) { cancelAnimationFrame(this.rafId); this.emit("error", error); return; }
+      this.sampleFrames++;
+      if (now - this.sampleStart >= 2500) {
+        this.fps = Math.round(this.sampleFrames * 1000 / (now - this.sampleStart));
+        this.slowSamples = this.fps < 38 ? this.slowSamples + 1 : 0;
+        if (this.autoQuality && this.slowSamples >= 2 && this.quality !== "low") this.setQuality(this.quality === "high" ? "balanced" : "low", true);
+        this.sampleStart = now;
+        this.sampleFrames = 0;
+      }
     };
     this.rafId = requestAnimationFrame(loop);
   }
@@ -536,7 +660,7 @@ export class Experience extends EventEmitter {
     // During cinematic, GSAP controls camera – just render
     if (this.state === "CINEMATIC") {
       this.world?.updateRings(elapsed / 1000, delta / 1000);
-      this.composer.render();
+      this.render();
       return;
     }
 
@@ -583,7 +707,7 @@ export class Experience extends EventEmitter {
     const isSprinting = this.character?.isRunning || false;
     this.world.updateRings(elapsed / 1000, delta / 1000, charPos, charVel, isSprinting);
 
-    this.composer.render();
+    this.render();
   }
 
   private static _tempTarget = new THREE.Vector3();
@@ -760,7 +884,7 @@ export class Experience extends EventEmitter {
     // Spring force: pull camera smoothly toward target position with ZERO GC allocations
     const error = Experience._tempError.subVectors(target, this.camera.position);
     this.cameraVelocity.addScaledVector(error, this.cameraSpring.stiffness * dt);
-    this.cameraVelocity.multiplyScalar(this.cameraSpring.damping);
+    this.cameraVelocity.multiplyScalar(Math.pow(this.cameraSpring.damping, dt * 60));
     this.camera.position.addScaledVector(this.cameraVelocity, dt);
 
     // Smooth camera lookAt targeting character + directional offset
@@ -770,21 +894,48 @@ export class Experience extends EventEmitter {
   }
 
   resize() {
+    if (this.disposed) return;
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
-    if (w === 0 || h === 0) return;
-    this.renderer.setSize(w, h);
-    this.composer.setSize(w, h);
-    // Keep bloom at HALF resolution (4x faster fillrate on Retina displays)
-    this.bloomPass.resolution.set(Math.floor(w / 2), Math.floor(h / 2));
+    if (!w || !h) return;
+    const settings = SETTINGS[this.quality];
+    const ratio = Math.min(window.devicePixelRatio || 1, settings.pixelRatio, Math.sqrt(settings.maxPixels / (w * h)));
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(w, h, false);
+    this.composer?.setPixelRatio(ratio);
+    this.composer?.setSize(w, h);
+    // Composer.setSize resets every pass; explicitly resize bloom afterwards.
+    this.bloomPass?.setSize(Math.floor(w * ratio / 2), Math.floor(h * ratio / 2));
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
 
+  private disposePostProcessing() {
+    if (!this.composer) return;
+    if (this.bloomPass) gsap.killTweensOf(this.bloomPass);
+    this.composer.passes.forEach(pass => pass.dispose());
+    this.composer.dispose();
+    this.composer = null;
+    this.bloomPass = null;
+  }
+
   destroy() {
+    if (this.disposed) return;
+    this.disposed = true;
     cancelAnimationFrame(this.rafId);
+    this.listeners.abort();
+    this.resizeObserver.disconnect();
+    this.clearInput();
+    if (this.partyInterval) clearInterval(this.partyInterval);
+    this.cinematicTimeline?.kill();
+    [this.camera, this.camera.position, this.cameraLookAt].forEach(target => gsap.killTweensOf(target));
+    this.disposePostProcessing();
     this.world?.dispose();
     this.character?.dispose();
+    disposeObject(this.scene);
+    this.scene.clear();
+    this.removeAllListeners();
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
   }
 }

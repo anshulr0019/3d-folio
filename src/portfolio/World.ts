@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import gsap from "gsap";
+import type { RenderQuality } from "./quality";
+import { disposeObject } from "./dispose";
 import { WeatherSystem, WeatherType } from "./Weather";
 import { PhysicsPropsSystem } from "./PhysicsProps";
 import { CollectiblesSystem } from "./Collectibles";
@@ -464,7 +466,12 @@ export class World {
   private particles: THREE.Points | null = null;
   private starParticles: THREE.Points | null = null;
   private screenUpdater: ((t: number) => void) | null = null;
-  private gltfLoader = new GLTFLoader();
+  private gltfLoader: GLTFLoader;
+  private disposed = false;
+  private quality: RenderQuality;
+  roomCeiling: THREE.PointLight | null = null;
+  roomWarm: THREE.PointLight | null = null;
+  private modelRequests = new Map<string, Promise<THREE.Group>>();
 
   private fadeOverlay: THREE.Mesh | null = null;
   private rings: THREE.Mesh[] = [];
@@ -485,13 +492,14 @@ export class World {
   // Baked contact shadow system (replaces real-time shadow maps)
   private contactShadowTex: THREE.CanvasTexture | null = null;
   private characterShadow: THREE.Mesh | null = null;
-  private characterShadowMat: THREE.MeshBasicMaterial | null = null;
   private animatedEmblems: THREE.Group[] = [];
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, quality: RenderQuality = "balanced", manager = THREE.DefaultLoadingManager) {
     this.scene = scene;
+    this.quality = quality;
+    this.gltfLoader = new GLTFLoader(manager);
     this.weather = new WeatherSystem(scene);
-    this.physicsProps = new PhysicsPropsSystem(scene);
+    this.physicsProps = new PhysicsPropsSystem();
     this.collectibles = new CollectiblesSystem();
 
     this.buildSkyDome();
@@ -511,6 +519,7 @@ export class World {
     this.buildAmbientDust();
     this.scene.add(this.roomGroup);
     this.createFade();
+    this.setQuality(quality);
   }
 
   private createCharacterShadow() {
@@ -620,6 +629,7 @@ export class World {
     const ceiling = new THREE.PointLight(0xa78bfa, 3.0, 18);
     ceiling.position.set(0, 5.0, 0);
     this.scene.add(ceiling);
+    this.roomCeiling = ceiling;
 
     // Soft rim accents
     const rim = new THREE.PointLight(0xc084fc, 2.5, 18);
@@ -629,6 +639,7 @@ export class World {
     const warm = new THREE.PointLight(0x38bdf8, 2.5, 16);
     warm.position.set(7, 6, 5);
     this.scene.add(warm);
+    this.roomWarm = warm;
   }
 
   setWeather(type: WeatherType) {
@@ -1173,9 +1184,10 @@ export class World {
     g.add(proceduralDeskGroup);
 
     // Load Custom Desktop GLB Model
-    this.gltfLoader.load(
+    if (this.quality !== "low") this.gltfLoader.load(
       "/models/desktop.glb",
       (gltf) => {
+        if (this.disposed) { disposeObject(gltf.scene); return; }
         const desktopModel = gltf.scene;
         const box = new THREE.Box3().setFromObject(desktopModel);
         const size = new THREE.Vector3();
@@ -1380,55 +1392,35 @@ export class World {
     onSuccess: (model: THREE.Group, size: THREE.Vector3) => void,
     onError?: () => void
   ) {
-    if (this.modelCache.has(url)) {
-      const template = this.modelCache.get(url)!;
-      const clone = template.clone(true);
-      const size = (template as any)._boundsSize as THREE.Vector3;
-      onSuccess(clone, size);
+    // Lite stays entirely procedural. Balanced imports only small scene assets.
+    if (this.quality === "low" || (this.quality === "balanced" && !["/models/house.glb", "/models/tree.glb"].includes(url))) {
+      onError?.();
       return;
     }
-
-    this.gltfLoader.load(
-      url,
-      (gltf) => {
+    let request = this.modelRequests.get(url);
+    if (!request) {
+      request = this.gltfLoader.loadAsync(url).then(gltf => {
         const rawModel = gltf.scene;
-
-        // Hide stand meshes on lamp models if present
-        rawModel.traverse((c: any) => {
-          if (c.name && c.name.toLowerCase().includes("stand")) {
-            c.visible = false;
-          }
-          if (c.isMesh) {
-            c.frustumCulled = true;
-            if (c.geometry) {
-              c.geometry.computeBoundingSphere();
-            }
-          }
+        if (this.disposed) { disposeObject(rawModel); throw new Error("World disposed"); }
+        rawModel.traverse((child) => {
+          if (child.name.toLowerCase().includes("stand")) child.visible = false;
+          if ((child as THREE.Mesh).isMesh) (child as THREE.Mesh).geometry.computeBoundingSphere();
         });
-
         const box = new THREE.Box3().setFromObject(rawModel);
-        const size = new THREE.Vector3();
-        box.getSize(size);
-        const center = new THREE.Vector3();
-        box.getCenter(center);
-
-        rawModel.position.x = -center.x;
-        rawModel.position.y = -box.min.y;
-        rawModel.position.z = -center.z;
-
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        rawModel.position.set(-center.x, -box.min.y, -center.z);
         const wrapper = new THREE.Group();
         wrapper.add(rawModel);
-        (wrapper as any)._boundsSize = size;
-
+        wrapper.userData.boundsSize = size;
         this.modelCache.set(url, wrapper);
-        const clone = wrapper.clone(true);
-        onSuccess(clone, size);
-      },
-      undefined,
-      () => {
-        if (onError) onError();
-      }
-    );
+        return wrapper;
+      });
+      this.modelRequests.set(url, request);
+    }
+    request.then(template => {
+      if (!this.disposed) onSuccess(template.clone(true), template.userData.boundsSize);
+    }).catch(() => { if (!this.disposed) onError?.(); });
   }
 
   // ─────────────────────────────────────────────
@@ -1717,7 +1709,7 @@ export class World {
         g.add(houseModel);
         proceduralHouseGroup.visible = false;
       },
-      () => console.warn("Using procedural fallback for house", id)
+      () => { /* Procedural house is already built. */ }
     );
 
     // Glowing Neon Store Sign facing the road
@@ -2473,6 +2465,13 @@ export class World {
     }
   }
 
+  setQuality(quality: RenderQuality) {
+    this.quality = quality;
+    if (this.particles) this.particles.visible = quality !== "low";
+    this.steamParticles.forEach(particle => { particle.visible = quality !== "low"; });
+    if (quality === "low") this.weather.setWeather("clear");
+  }
+
   updateRings(
     t: number,
     dt: number = 0.016,
@@ -2515,11 +2514,11 @@ export class World {
     }
 
     if (isRoom) {
-      if (this.screenUpdater) {
+      if (this.screenUpdater && this.quality !== "low") {
         this.screenUpdater(t);
       }
 
-      for (let idx = 0; idx < this.steamParticles.length; idx++) {
+      for (let idx = 0; this.quality !== "low" && idx < this.steamParticles.length; idx++) {
         const steam = this.steamParticles[idx];
         steam.position.y += 0.002;
         steam.scale.addScalar(0.001);
@@ -2544,17 +2543,13 @@ export class World {
   }
 
   dispose() {
-    [this.roomGroup, this.streetGroup].forEach((grp) => {
-      grp.traverse((c: any) => {
-        if (c.geometry) c.geometry.dispose();
-        if (c.material) {
-          if (Array.isArray(c.material)) c.material.forEach((m: any) => m.dispose());
-          else c.material.dispose();
-        }
-      });
-      this.scene.remove(grp);
-    });
-    if (this.particles) this.scene.remove(this.particles);
-    if (this.fadeOverlay) this.scene.remove(this.fadeOverlay);
+    this.disposed = true;
+    this.collectibles.onCollectCallback = undefined;
+    [this.roomGroup, this.streetGroup].forEach(group => { disposeObject(group); this.scene.remove(group); });
+    this.modelCache.forEach(model => disposeObject(model));
+    this.modelCache.clear();
+    this.modelRequests.clear();
+    // Scene-owned particles, weather and the fade overlay are disposed by Experience.
+    _cachedParquetTex = _cachedWallTex = _cachedAsphaltTex = _cachedAsphaltNorm = _cachedContactShadowTex = _cachedSidewalkTex = null;
   }
 }

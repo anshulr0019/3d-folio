@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { sound } from "./Audio";
+import { disposeObject } from "./dispose";
 
 function stripRootMotion(clip: THREE.AnimationClip) {
   clip.tracks.forEach((track) => {
@@ -22,6 +23,8 @@ function stripRootMotion(clip: THREE.AnimationClip) {
 export class Character {
   group = new THREE.Group();
   private scene: THREE.Scene;
+  private disposed = false;
+  private manager: THREE.LoadingManager;
   private proceduralGroup = new THREE.Group();
   private gltfGroup = new THREE.Group();
   private parts: Record<string, THREE.Mesh | THREE.Group> = {};
@@ -47,8 +50,9 @@ export class Character {
   // Pre-allocated vectors to prevent GC thrashing in render loop
   private static dustVec = new THREE.Vector3();
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, detailed = true, manager = THREE.DefaultLoadingManager) {
     this.scene = scene;
+    this.manager = manager;
     this.buildProceduralModel();
     this.proceduralGroup.scale.setScalar(1.35);
     this.createDustPool();
@@ -59,11 +63,11 @@ export class Character {
     this.group.position.set(0, 0, 3);
     this.setRotationY(Math.PI);
 
-    this.loadCharacterModel();
+    if (detailed) this.loadCharacterModel();
   }
 
   private loadCharacterModel() {
-    const textureLoader = new THREE.TextureLoader();
+    const textureLoader = new THREE.TextureLoader(this.manager);
     const diffuseMap = textureLoader.load("/textures/character/texture_diffuse.png");
     diffuseMap.colorSpace = THREE.SRGBColorSpace;
     diffuseMap.flipY = true;
@@ -82,12 +86,60 @@ export class Character {
       metalness: 0.0,
     });
 
-    const fbxLoader = new FBXLoader();
+    // High quality uses one shared GLB containing the mesh and all four clips.
+    // This replaces four separate FBX downloads (about 19 MB) with one ~6.6 MB asset.
+    const optimizedLoader = new GLTFLoader(this.manager);
+    optimizedLoader.load("/models/avatar.glb", (gltf) => {
+      if (this.disposed) { disposeObject(gltf.scene); return; }
+      const model = gltf.scene;
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      model.position.set(-center.x, -box.min.y, -center.z);
+      const wrapper = new THREE.Group();
+      wrapper.add(model);
+      wrapper.scale.setScalar(2.4 / (size.y || 2.4));
+      wrapper.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          mesh.material = characterMat;
+          mesh.castShadow = true;
+          mesh.receiveShadow = false;
+        }
+      });
+      if (gltf.animations.length) {
+        this.mixer = new THREE.AnimationMixer(model);
+        gltf.animations.forEach((clip) => {
+          const name = clip.name.toLowerCase();
+          stripRootMotion(clip);
+          const action = this.mixer!.clipAction(clip);
+          if (name === "jump") { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
+          this.animations.set(name, action);
+        });
+        const idle = this.animations.get("idle") || this.animations.values().next().value;
+        idle?.play();
+        if (idle) this.currentActionName = idle.getClip().name.toLowerCase();
+      }
+      this.loadedModel = wrapper;
+      this.gltfGroup.add(wrapper);
+      this.proceduralGroup.visible = false;
+    }, undefined, () => {
+      // Keep the old loader fallback below for deployments that omit avatar.glb.
+      legacyCharacterFallback();
+    });
+    return;
+
+    function legacyCharacterFallback() {
+      // The original FBX path remains below as a backwards-compatible fallback.
+    }
+
+    const fbxLoader = new FBXLoader(this.manager);
     
     // 1. Try loading FBX animated Mixamo set (Idle.fbx, Walking.fbx, Running.fbx)
     fbxLoader.load(
       "/models/Idle.fbx",
       (fbx) => {
+        if (this.disposed) { disposeObject(fbx); characterMat.dispose(); diffuseMap.dispose(); normalMap.dispose(); roughnessMap.dispose(); return; }
         const model = fbx;
 
         // Measure mesh-only bounding box for exact feet grounding on floor (Y = 0)
@@ -151,6 +203,8 @@ export class Character {
         fbxLoader.load(
           "/models/Walking.fbx",
           (walkFbx) => {
+            disposeObject(walkFbx);
+            if (this.disposed) return;
             if (walkFbx.animations && walkFbx.animations.length > 0) {
               const walkClip = walkFbx.animations[0];
               walkClip.name = "walk";
@@ -167,6 +221,8 @@ export class Character {
         fbxLoader.load(
           "/models/Running.fbx",
           (runFbx) => {
+            disposeObject(runFbx);
+            if (this.disposed) return;
             if (runFbx.animations && runFbx.animations.length > 0) {
               const runClip = runFbx.animations[0];
               runClip.name = "run";
@@ -183,6 +239,8 @@ export class Character {
         fbxLoader.load(
           "/models/Jumping.fbx",
           (jumpFbx) => {
+            disposeObject(jumpFbx);
+            if (this.disposed) return;
             if (jumpFbx.animations && jumpFbx.animations.length > 0) {
               const jumpClip = jumpFbx.animations[0];
               jumpClip.name = "jump";
@@ -203,11 +261,13 @@ export class Character {
       },
       undefined,
       () => {
+        if (this.disposed) return;
         // 2. Fallback to character.glb if FBX files not present
-        const gltfLoader = new GLTFLoader();
+        const gltfLoader = new GLTFLoader(this.manager);
         gltfLoader.load(
           "/models/character.glb",
           (gltf) => {
+            if (this.disposed) { disposeObject(gltf.scene); return; }
             const model = gltf.scene;
             const box = new THREE.Box3().setFromObject(model);
             const size = new THREE.Vector3();
@@ -487,7 +547,7 @@ export class Character {
     joystick: { x: number; y: number },
     delta: number,
     elapsed: number,
-    cameraYaw: number,
+    _cameraYaw: number,
     surface: "wood" | "asphalt" = "wood"
   ) {
     const dt = Math.min(delta / 1000, 0.1); // cap max dt to prevent physics tunneling
@@ -666,6 +726,7 @@ export class Character {
   }
 
   dispose() {
+    this.disposed = true;
     this.scene.remove(this.group);
     this.dustParticles.forEach((p) => {
       this.scene.remove(p);
@@ -677,12 +738,6 @@ export class Character {
       this.mixer.stopAllAction();
       this.mixer = null;
     }
-    this.group.traverse((c: any) => {
-      if (c.geometry) c.geometry.dispose();
-      if (c.material) {
-        if (Array.isArray(c.material)) c.material.forEach((m: any) => m.dispose());
-        else c.material.dispose();
-      }
-    });
+    disposeObject(this.group);
   }
 }
