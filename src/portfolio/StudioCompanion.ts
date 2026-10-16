@@ -5,7 +5,7 @@ export class StudioCompanion {
   group: THREE.Group;
   private head: THREE.Mesh;
   private eye: THREE.Mesh;
-  private basePos = new THREE.Vector3(-3.8, 1.6, -1.8);
+  private basePos = new THREE.Vector3(-2.4, 1.9, -5.3);
   private lastInteractTime = 0;
   private wiggle = 0;
 
@@ -16,7 +16,7 @@ export class StudioCompanion {
     // 1. Droid Spherical Head / Body
     const bodyGeo = new THREE.SphereGeometry(0.32, 16, 16);
     const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
+      color: 0x253b34,
       metalness: 0.85,
       roughness: 0.2,
     });
@@ -26,7 +26,7 @@ export class StudioCompanion {
     // 2. Cyan Glowing Visor / Screen Eye
     const eyeGeo = new THREE.BoxGeometry(0.24, 0.1, 0.06);
     const eyeMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
+      color: 0xc5d6a0,
     });
     this.eye = new THREE.Mesh(eyeGeo, eyeMat);
     this.eye.position.set(0, 0.04, 0.3);
@@ -42,7 +42,7 @@ export class StudioCompanion {
 
     const antTip = new THREE.Mesh(
       new THREE.SphereGeometry(0.04, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xa855f7 })
+      new THREE.MeshBasicMaterial({ color: 0xb99a59 })
     );
     antTip.position.set(0, 0.48, 0);
     this.head.add(antTip);
@@ -50,7 +50,7 @@ export class StudioCompanion {
     // 4. Anti-Gravity Energy Ring under droid
     const ringGeo = new THREE.TorusGeometry(0.18, 0.02, 8, 16);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x06b6d4,
+      color: 0xb99a59,
       transparent: true,
       opacity: 0.8,
     });

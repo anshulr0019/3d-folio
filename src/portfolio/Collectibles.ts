@@ -32,7 +32,7 @@ export class CollectiblesSystem {
       color: 0xec4899,
       exp: 150,
       location: "street",
-      position: new THREE.Vector3(-5.5, 1.3, -20),
+      position: new THREE.Vector3(8.5, 1.1, 5.5),
       collected: false,
     },
     {
@@ -42,7 +42,7 @@ export class CollectiblesSystem {
       color: 0x10b981,
       exp: 160,
       location: "street",
-      position: new THREE.Vector3(5.5, 1.3, -38),
+      position: new THREE.Vector3(8.5, 1.1, -23),
       collected: false,
     },
     {
@@ -52,7 +52,7 @@ export class CollectiblesSystem {
       color: 0xf59e0b,
       exp: 200,
       location: "street",
-      position: new THREE.Vector3(-5.5, 1.3, -58),
+      position: new THREE.Vector3(-6.5, 1.1, -20.5),
       collected: false,
     },
     {
@@ -62,7 +62,7 @@ export class CollectiblesSystem {
       color: 0x6366f1,
       exp: 220,
       location: "street",
-      position: new THREE.Vector3(5.5, 1.3, -76),
+      position: new THREE.Vector3(8.5, 1.1, -31),
       collected: false,
     },
   ];

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anshul — static character colour draft</title>
+<style>
+  *{box-sizing:border-box}body{margin:0;background:#e5e8df;color:#253b34;font:15px/1.5 system-ui,sans-serif}
+  main{max-width:1100px;margin:auto;padding:24px}h1{font-size:24px;margin:0}p{margin:8px 0 16px;max-width:75ch}
+  #stage{height:min(72vh,760px);min-height:380px;background:#f1f0e8;border-radius:16px;overflow:hidden;touch-action:none}canvas{display:block;width:100%;height:100%}
+  nav{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}button{padding:11px 18px;border:1px solid #a6b0a1;background:#f8f6ee;color:inherit;border-radius:8px;font:inherit;cursor:pointer}button:focus-visible{outline:3px solid #355c4b;outline-offset:3px}
+  #status{font-variant-numeric:tabular-nums;font-size:13px}footer{font-size:13px;opacity:.8}
+</style>
+<main>
+  <h1>Anshul / character colour draft</h1>
+  <p>Static mesh with front/rear reference projection. Inspect the face, clothing colours and side seams. This draft has no skeleton or animation.</p>
+  <div id="stage" aria-label="Interactive character preview. Drag to rotate and scroll to zoom."></div>
+  <nav aria-label="Character views"><button id="front">Front</button><button id="quarter">Three-quarter</button><button id="back">Back</button><button id="lighting" aria-pressed="false">Show studio lighting</button></nav>
+  <p id="status" role="status">Loading character…</p>
+  <footer>Floor removed; two shoe-sole openings capped. The face and colours need review before rigging. The live portfolio character has not been replaced.</footer>
+</main>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js"}}</script>
+<script type="module">
+import * as T from 'three';
+import {GLTFLoader} from '/node_modules/three/examples/jsm/loaders/GLTFLoader.js';
+import {OrbitControls} from '/node_modules/three/examples/jsm/controls/OrbitControls.js';
+import {MeshoptDecoder} from '/node_modules/three/examples/jsm/libs/meshopt_decoder.module.js';
+const host=document.querySelector('#stage'),status=document.querySelector('#status');
+const scene=new T.Scene(); scene.background=new T.Color('#f1f0e8');
+const camera=new T.PerspectiveCamera(32,1,.01,100);
+const renderer=new T.WebGLRenderer({antialias:true,alpha:false,powerPreference:'low-power'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.outputColorSpace=T.SRGBColorSpace;host.append(renderer.domElement);
+scene.add(new T.HemisphereLight(0xfff9ed,0x8a9784,1.4));
+const light=new T.DirectionalLight(0xffffff,1.4);light.position.set(3,5,4);scene.add(light);
+const controls=new OrbitControls(camera,renderer.domElement);controls.target.set(0,1.2,0);controls.minDistance=2.6;controls.maxDistance=9;controls.enableDamping=false;
+const render=()=>renderer.render(scene,camera);controls.addEventListener('change',render);
+const view=(x,y,z)=>{camera.position.set(x,y,z);controls.update();render()};
+document.querySelector('#front').onclick=()=>view(0,1.2,5.3);
+document.querySelector('#quarter').onclick=()=>view(3.2,1.65,4.6);
+document.querySelector('#back').onclick=()=>view(0,1.2,-5.3);
+const resize=new ResizeObserver(()=>{camera.aspect=host.clientWidth/host.clientHeight;camera.updateProjectionMatrix();renderer.setSize(host.clientWidth,host.clientHeight);render()});resize.observe(host);
+try{
+  const model=await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync('./anshul-colour-draft-v1.glb');
+  const box=new T.Box3().setFromObject(model.scene),height=box.max.y-box.min.y,center=box.getCenter(new T.Vector3());
+  const wrapper=new T.Group();wrapper.scale.setScalar(2.4/height);model.scene.position.set(-center.x,-box.min.y,-center.z);wrapper.add(model.scene);scene.add(wrapper);
+  let triangles=0,vertices=0;const materialPairs=[];
+  model.scene.traverse(object=>{if(!object.isMesh)return;triangles+=(object.geometry.index?.count??object.geometry.attributes.position.count)/3;vertices+=object.geometry.attributes.position.count;const lit=object.material;const flat=new T.MeshBasicMaterial({map:lit.map});materialPairs.push({object,lit,flat});object.material=flat;});
+  document.querySelector('#lighting').onclick=event=>{const active=event.currentTarget.getAttribute('aria-pressed')!=='true';event.currentTarget.setAttribute('aria-pressed',String(active));event.currentTarget.textContent=active?'Show colour texture':'Show studio lighting';materialPairs.forEach(({object,lit,flat})=>{object.material=active?lit:flat});render()};
+  const stats=await fetch('./anshul-colour-draft-v1.json').then(response=>response.json());
+  status.textContent=`Ready · ${triangles.toLocaleString()} triangles · ${Math.round(stats.bytes/1000)} KB GLB · one material · static draft`;
+  view(0,1.2,5.3);
+}catch(error){status.textContent=`Preview failed: ${error.message}`;console.error(error)}
+</script>
+</html>

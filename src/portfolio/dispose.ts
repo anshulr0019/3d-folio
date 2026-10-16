@@ -9,6 +9,7 @@ export function disposeObject(root: THREE.Object3D) {
   root.traverse(object => {
     [object, object.position, object.rotation, object.scale].forEach(target => gsap.killTweensOf(target));
     const mesh = object as THREE.Mesh;
+    if (mesh instanceof THREE.InstancedMesh) mesh.dispose();
     if (mesh.geometry) geometries.add(mesh.geometry);
     if (mesh.material) (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach(material => materials.add(material));
   });

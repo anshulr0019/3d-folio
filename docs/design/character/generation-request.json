@@ -1,0 +1,32 @@
+{
+  "status": "canceled-by-user",
+  "cancellation": {
+    "date": "2026-10-16",
+    "reason": "User rejected the likeness draft and chose to retain the previous animated character.",
+    "resumeRequiresNewRequest": true
+  },
+  "reference": "docs/design/character/anshul-model-reference-front-v1.png",
+  "provider": "Meshy via Higgsfield",
+  "params": {
+    "model": "image_to_3d",
+    "should_texture": true,
+    "texture_prompt": "Preserve the reference character's face, swept dark hair, short beard, forest green overshirt, ivory T-shirt, charcoal trousers, off-white sneakers and ivory backpack with tan straps. Matte stylized game character with sculpted hair masses and restrained fabric detail. No logos or extra accessories.",
+    "enable_rigging": true,
+    "enable_animation": true,
+    "animation_action_id": 0,
+    "should_remesh": true,
+    "target_polycount": 10000,
+    "topology": "triangle",
+    "enable_pbr": false,
+    "pose_mode": "a-pose",
+    "rigging_height_meters": 1.8
+  },
+  "submission": {
+    "authenticated": true,
+    "availableWorkspaceCredits": 0,
+    "quoteRequiresReference": true,
+    "submitted": false,
+    "costQuoted": false,
+    "referenceUploaded": false
+  }
+}

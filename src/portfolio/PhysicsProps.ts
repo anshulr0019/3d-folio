@@ -34,17 +34,17 @@ export class PhysicsPropsSystem {
     ballCanvas.width = 128;
     ballCanvas.height = 64;
     const bCtx = ballCanvas.getContext("2d")!;
-    bCtx.fillStyle = "#38bdf8";
+    bCtx.fillStyle = "#355c4b";
     bCtx.fillRect(0, 0, 64, 64);
-    bCtx.fillStyle = "#ec4899";
+    bCtx.fillStyle = "#e9dfc7";
     bCtx.fillRect(64, 0, 64, 64);
-    bCtx.fillStyle = "#facc15";
+    bCtx.fillStyle = "#b99a59";
     bCtx.fillRect(0, 0, 128, 16);
     const ballTex = new THREE.CanvasTexture(ballCanvas);
     const ballMat = new THREE.MeshStandardMaterial({
       map: ballTex,
-      roughness: 0.2,
-      metalness: 0.1,
+      roughness: 0.8,
+      metalness: 0.0,
     });
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.position.set(2.0, 0.46, 1.2);
@@ -70,7 +70,7 @@ export class PhysicsPropsSystem {
     // 2. 📦 Wooden Studio Crate (Near Desk)
     const crateGeo = new THREE.BoxGeometry(0.7, 0.7, 0.7);
     const crateMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706,
+      color: 0xb68d5d,
       roughness: 0.6,
       metalness: 0.1,
     });
@@ -172,8 +172,8 @@ export class PhysicsPropsSystem {
   // Build Street Props
   // ─────────────────────────────────────────────
   buildStreetProps(streetGroup: THREE.Group) {
-    const streetMin = new THREE.Vector2(-9.5, -110);
-    const streetMax = new THREE.Vector2(9.5, 10);
+    const streetMin = new THREE.Vector2(-17, -41);
+    const streetMax = new THREE.Vector2(17, 10);
 
     // Street Soccer Ball (Near Plaza entrance)
     const ballGeo = new THREE.SphereGeometry(0.55, 18, 14);
@@ -183,7 +183,7 @@ export class PhysicsPropsSystem {
       metalness: 0.1,
     });
     const soccer = new THREE.Mesh(ballGeo, soccerMat);
-    soccer.position.set(2.0, 0.55, -20);
+    soccer.position.set(2.0, 0.55, -4);
     streetGroup.add(soccer);
 
     this.props.push({
@@ -205,15 +205,15 @@ export class PhysicsPropsSystem {
 
     // Street Stacked Crates
     const cratePositions = [
-      [-4.0, -42],
-      [4.2, -72],
-      [-4.5, -88],
+      [-15.0, -14],
+      [15.0, -32],
+      [-13.0, 7],
     ];
 
     cratePositions.forEach(([cx, cz]) => {
       const crate = new THREE.Mesh(
         new THREE.BoxGeometry(0.85, 0.85, 0.85),
-        new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.45, metalness: 0.3 })
+        new THREE.MeshStandardMaterial({ color: 0xb68d5d, roughness: 0.8, metalness: 0.0 })
       );
       crate.position.set(cx, 0.425, cz);
       streetGroup.add(crate);

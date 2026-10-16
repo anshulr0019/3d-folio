@@ -40,7 +40,7 @@ export const CONTENT = {
     {
       title: "DeliveryWatch",
       description:
-        "Free 24/7 email deliverability & blacklist monitoring SaaS. Continuously checks SPF, DKIM, DMARC, MX records and 8 blacklists every 15 minutes — with instant WhatsApp, Slack & email alerts.",
+        "Email DNS health and reputation monitoring for SPF, DKIM, DMARC, MX and blacklist observations, with change history and notification tracking.",
       tech: ["Next.js", "TypeScript", "Supabase", "DNS APIs"],
       emoji: "📬",
       link: "https://delivery-watch.vercel.app",

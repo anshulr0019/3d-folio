@@ -1,539 +1,230 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { sound } from "./Audio";
 import { disposeObject } from "./dispose";
 
-function stripRootMotion(clip: THREE.AnimationClip) {
-  clip.tracks.forEach((track) => {
-    if (track.name.endsWith(".position")) {
-      const values = (track as THREE.VectorKeyframeTrack).values;
-      if (values && values.length >= 3) {
-        const startX = values[0];
-        const startZ = values[2];
-        for (let i = 0; i < values.length; i += 3) {
-          values[i] = startX;     // Lock X to start position (removes forward displacement)
-          values[i + 2] = startZ; // Lock Z to start position (removes forward displacement)
-        }
-      }
-    }
-  });
-}
+export type AvatarStatus = "loading" | "ready" | "error";
+
+const HEIGHT = 2.4;
+const JUMP_SPEED = 7.2;
+const GRAVITY = 24;
+const BLEND_RATE = 14;
 
 export class Character {
   group = new THREE.Group();
-  private scene: THREE.Scene;
+  private visual = new THREE.Group();
+  private fallback = new THREE.Group();
   private disposed = false;
-  private manager: THREE.LoadingManager;
-  private proceduralGroup = new THREE.Group();
-  private gltfGroup = new THREE.Group();
-  private parts: Record<string, THREE.Mesh | THREE.Group> = {};
+  private detailedRequested = false;
+  private baseLoad: Promise<void> | null = null;
+  private detailLoad: Promise<void> | null = null;
   private loadedModel: THREE.Object3D | null = null;
-
-  // GLTF/FBX Animation Mixer
+  private material: THREE.MeshStandardMaterial | null = null;
+  private detailMaps: THREE.Texture[] = [];
   private mixer: THREE.AnimationMixer | null = null;
-  private animations: Map<string, THREE.AnimationAction> = new Map();
-  private currentActionName = "";
-  
-  speed = 6.0;
-  runSpeed = 11.0;
-  direction = new THREE.Vector3(0, 0, -1);
-  velocity = new THREE.Vector3(0, 0, 0);
-  isMoving = false;
-  isRunning = false;
-  
-  targetRotY = Math.PI;
-  private currentTiltX = 0;
-  private dustParticles: THREE.Mesh[] = [];
-  private stepTimer = 0;
-
-  // Pre-allocated vectors to prevent GC thrashing in render loop
-  private static dustVec = new THREE.Vector3();
-
-  constructor(scene: THREE.Scene, detailed = true, manager = THREE.DefaultLoadingManager) {
-    this.scene = scene;
-    this.manager = manager;
-    this.buildProceduralModel();
-    this.proceduralGroup.scale.setScalar(1.35);
-    this.createDustPool();
-
-    this.group.add(this.proceduralGroup);
-    this.group.add(this.gltfGroup);
-    this.scene.add(this.group);
-    this.group.position.set(0, 0, 3);
-    this.setRotationY(Math.PI);
-
-    if (detailed) this.loadCharacterModel();
-  }
-
-  private loadCharacterModel() {
-    const textureLoader = new THREE.TextureLoader(this.manager);
-    const diffuseMap = textureLoader.load("/textures/character/texture_diffuse.png");
-    diffuseMap.colorSpace = THREE.SRGBColorSpace;
-    diffuseMap.flipY = true;
-
-    const normalMap = textureLoader.load("/textures/character/texture_normal.png");
-    normalMap.flipY = true;
-
-    const roughnessMap = textureLoader.load("/textures/character/texture_roughness.png");
-    roughnessMap.flipY = true;
-
-    const characterMat = new THREE.MeshStandardMaterial({
-      map: diffuseMap,
-      normalMap: normalMap,
-      roughnessMap: roughnessMap,
-      roughness: 0.7,
-      metalness: 0.0,
-    });
-
-    // High quality uses one shared GLB containing the mesh and all four clips.
-    // This replaces four separate FBX downloads (about 19 MB) with one ~6.6 MB asset.
-    const optimizedLoader = new GLTFLoader(this.manager);
-    optimizedLoader.load("/models/avatar.glb", (gltf) => {
-      if (this.disposed) { disposeObject(gltf.scene); return; }
-      const model = gltf.scene;
-      const box = new THREE.Box3().setFromObject(model);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      model.position.set(-center.x, -box.min.y, -center.z);
-      const wrapper = new THREE.Group();
-      wrapper.add(model);
-      wrapper.scale.setScalar(2.4 / (size.y || 2.4));
-      wrapper.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
-          mesh.material = characterMat;
-          mesh.castShadow = true;
-          mesh.receiveShadow = false;
-        }
-      });
-      if (gltf.animations.length) {
-        this.mixer = new THREE.AnimationMixer(model);
-        gltf.animations.forEach((clip) => {
-          const name = clip.name.toLowerCase();
-          stripRootMotion(clip);
-          const action = this.mixer!.clipAction(clip);
-          if (name === "jump") { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
-          this.animations.set(name, action);
-        });
-        const idle = this.animations.get("idle") || this.animations.values().next().value;
-        idle?.play();
-        if (idle) this.currentActionName = idle.getClip().name.toLowerCase();
-      }
-      this.loadedModel = wrapper;
-      this.gltfGroup.add(wrapper);
-      this.proceduralGroup.visible = false;
-    }, undefined, () => {
-      // Keep the old loader fallback below for deployments that omit avatar.glb.
-      legacyCharacterFallback();
-    });
-    return;
-
-    function legacyCharacterFallback() {
-      // The original FBX path remains below as a backwards-compatible fallback.
-    }
-
-    const fbxLoader = new FBXLoader(this.manager);
-    
-    // 1. Try loading FBX animated Mixamo set (Idle.fbx, Walking.fbx, Running.fbx)
-    fbxLoader.load(
-      "/models/Idle.fbx",
-      (fbx) => {
-        if (this.disposed) { disposeObject(fbx); characterMat.dispose(); diffuseMap.dispose(); normalMap.dispose(); roughnessMap.dispose(); return; }
-        const model = fbx;
-
-        // Measure mesh-only bounding box for exact feet grounding on floor (Y = 0)
-        let meshMinY = Infinity;
-        model.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) {
-            const mesh = child as THREE.Mesh;
-            mesh.geometry.computeBoundingBox();
-            if (mesh.geometry.boundingBox && mesh.geometry.boundingBox.min.y < meshMinY) {
-              meshMinY = mesh.geometry.boundingBox.min.y;
-            }
-          }
-        });
-
-        const box = new THREE.Box3().setFromObject(model);
-        const size = new THREE.Vector3();
-        box.getSize(size);
-        const center = new THREE.Vector3();
-        box.getCenter(center);
-
-        if (meshMinY === Infinity) {
-          meshMinY = box.min.y;
-        }
-
-        model.position.x = -center.x;
-        // Soles of feet rest firmly on the ground floor surface
-        model.position.y = -meshMinY - 0.34;
-        model.position.z = -center.z;
-
-        const wrapper = new THREE.Group();
-        wrapper.add(model);
-
-        // Normalize character height to prominent size (~2.4 units)
-        const targetHeight = 2.4;
-        const scaleFactor = targetHeight / (size.y || 2.4);
-        wrapper.scale.setScalar(scaleFactor);
-
-        wrapper.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) {
-            const mesh = child as THREE.Mesh;
-            mesh.material = characterMat;
-            mesh.castShadow = true;
-            mesh.receiveShadow = false;
-          }
-        });
-
-        // Initialize AnimationMixer on the rigged FBX character model
-        this.mixer = new THREE.AnimationMixer(model);
-
-        if (fbx.animations && fbx.animations.length > 0) {
-          const idleClip = fbx.animations[0];
-          idleClip.name = "idle";
-          stripRootMotion(idleClip);
-          const action = this.mixer.clipAction(idleClip);
-          this.animations.set("idle", action);
-          action.play();
-          this.currentActionName = "idle";
-        }
-
-        // Load Walking animation clip from Walking.fbx
-        fbxLoader.load(
-          "/models/Walking.fbx",
-          (walkFbx) => {
-            disposeObject(walkFbx);
-            if (this.disposed) return;
-            if (walkFbx.animations && walkFbx.animations.length > 0) {
-              const walkClip = walkFbx.animations[0];
-              walkClip.name = "walk";
-              stripRootMotion(walkClip);
-              const action = this.mixer!.clipAction(walkClip);
-              this.animations.set("walk", action);
-            }
-          },
-          undefined,
-          (err) => console.warn("Could not load Walking.fbx:", err)
-        );
-
-        // Load Running animation clip from Running.fbx
-        fbxLoader.load(
-          "/models/Running.fbx",
-          (runFbx) => {
-            disposeObject(runFbx);
-            if (this.disposed) return;
-            if (runFbx.animations && runFbx.animations.length > 0) {
-              const runClip = runFbx.animations[0];
-              runClip.name = "run";
-              stripRootMotion(runClip);
-              const action = this.mixer!.clipAction(runClip);
-              this.animations.set("run", action);
-            }
-          },
-          undefined,
-          (err) => console.warn("Could not load Running.fbx:", err)
-        );
-
-        // Load Jumping animation clip from Jumping.fbx
-        fbxLoader.load(
-          "/models/Jumping.fbx",
-          (jumpFbx) => {
-            disposeObject(jumpFbx);
-            if (this.disposed) return;
-            if (jumpFbx.animations && jumpFbx.animations.length > 0) {
-              const jumpClip = jumpFbx.animations[0];
-              jumpClip.name = "jump";
-              stripRootMotion(jumpClip);
-              const action = this.mixer!.clipAction(jumpClip);
-              action.setLoop(THREE.LoopOnce, 1);
-              action.clampWhenFinished = true;
-              this.animations.set("jump", action);
-            }
-          },
-          undefined,
-          (err) => console.warn("Could not load Jumping.fbx:", err)
-        );
-
-        this.loadedModel = wrapper;
-        this.gltfGroup.add(wrapper);
-        this.proceduralGroup.visible = false;
-      },
-      undefined,
-      () => {
-        if (this.disposed) return;
-        // 2. Fallback to character.glb if FBX files not present
-        const gltfLoader = new GLTFLoader(this.manager);
-        gltfLoader.load(
-          "/models/character.glb",
-          (gltf) => {
-            if (this.disposed) { disposeObject(gltf.scene); return; }
-            const model = gltf.scene;
-            const box = new THREE.Box3().setFromObject(model);
-            const size = new THREE.Vector3();
-            box.getSize(size);
-            const center = new THREE.Vector3();
-            box.getCenter(center);
-
-            model.position.x = -center.x;
-            model.position.y = -box.min.y;
-            model.position.z = -center.z;
-
-            const wrapper = new THREE.Group();
-            wrapper.add(model);
-
-            const targetHeight = 2.4;
-            const scaleFactor = targetHeight / (size.y || 2.4);
-            wrapper.scale.setScalar(scaleFactor);
-
-            wrapper.traverse((child) => {
-              if ((child as THREE.Mesh).isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = false;
-              }
-            });
-
-            if (gltf.animations && gltf.animations.length > 0) {
-              this.mixer = new THREE.AnimationMixer(model);
-              gltf.animations.forEach((clip) => {
-                const name = clip.name.toLowerCase();
-                stripRootMotion(clip);
-                const action = this.mixer!.clipAction(clip);
-                this.animations.set(name, action);
-              });
-              const idleAction = this.animations.get("idle") || Array.from(this.animations.values())[0];
-              if (idleAction) {
-                idleAction.play();
-                this.currentActionName = "idle";
-              }
-            }
-
-            this.loadedModel = wrapper;
-            this.gltfGroup.add(wrapper);
-            this.proceduralGroup.visible = false;
-          },
-          undefined,
-          (err) => console.warn("GLTF fallback error:", err)
-        );
-      }
-    );
-  }
-
-  private buildProceduralModel() {
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0xffd1b3, roughness: 0.4 });
-    const hoodieMat = new THREE.MeshStandardMaterial({ color: 0x4f46e5, roughness: 0.65, metalness: 0.1 });
-    const hoodDetailMat = new THREE.MeshStandardMaterial({ color: 0x3730a3, roughness: 0.7 });
-    const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1e1b4b, roughness: 0.8 });
-    const shoeMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.5 });
-    const glowSoleMat = new THREE.MeshStandardMaterial({
-      color: 0x6366f1,
-      emissive: 0x6366f1,
-      emissiveIntensity: 0.8,
-    });
-    const headphoneMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3, metalness: 0.8 });
-    const accentMat = new THREE.MeshStandardMaterial({ color: 0xa855f7, emissive: 0xa855f7, emissiveIntensity: 0.5 });
-
-    // ── Head ──────────────────────────────────
-    const headGroup = new THREE.Group();
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.5, 0.46), skinMat);
-    head.position.y = 1.64;
-    head.castShadow = true;
-    headGroup.add(head);
-
-    const hair = new THREE.Mesh(
-      new THREE.BoxGeometry(0.5, 0.18, 0.48),
-      new THREE.MeshStandardMaterial({ color: 0x1e1b4b, roughness: 0.9 })
-    );
-    hair.position.set(0, 1.94, 0.01);
-    headGroup.add(hair);
-
-    const visor = new THREE.Mesh(
-      new THREE.BoxGeometry(0.42, 0.12, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0x06b6d4, emissive: 0x06b6d4, emissiveIntensity: 0.6, transparent: true, opacity: 0.85 })
-    );
-    visor.position.set(0, 1.66, 0.22);
-    headGroup.add(visor);
-
-    const earPadGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.08, 12);
-    const padL = new THREE.Mesh(earPadGeo, headphoneMat);
-    padL.rotation.z = Math.PI / 2;
-    padL.position.set(-0.27, 1.64, 0);
-    headGroup.add(padL);
-
-    const padR = padL.clone();
-    padR.position.set(0.27, 1.64, 0);
-    headGroup.add(padR);
-
-    const band = new THREE.Mesh(
-      new THREE.TorusGeometry(0.26, 0.03, 8, 16, Math.PI),
-      headphoneMat
-    );
-    band.rotation.y = Math.PI / 2;
-    band.position.set(0, 1.88, 0);
-    headGroup.add(band);
-
-    this.proceduralGroup.add(headGroup);
-    this.parts.headGroup = headGroup;
-
-    // ── Torso ──────────────────────────────────
-    const torsoGroup = new THREE.Group();
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.76, 0.4), hoodieMat);
-    torso.position.y = 1.07;
-    torso.castShadow = true;
-    torsoGroup.add(torso);
-
-    const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.25, 0.06), hoodDetailMat);
-    pocket.position.set(0, 0.85, 0.21);
-    torsoGroup.add(pocket);
-
-    const stringL = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.25), accentMat);
-    stringL.position.set(-0.1, 1.25, 0.21);
-    torsoGroup.add(stringL);
-    const stringR = stringL.clone();
-    stringR.position.set(0.1, 1.25, 0.21);
-    torsoGroup.add(stringR);
-
-    this.proceduralGroup.add(torsoGroup);
-    this.parts.torsoGroup = torsoGroup;
-
-    // ── Arms ──────────────────────────────────
-    const armGeo = new THREE.BoxGeometry(0.2, 0.65, 0.2);
-    armGeo.translate(0, -0.325, 0); // Pivot at shoulder
-
-    const armL = new THREE.Mesh(armGeo, hoodieMat);
-    armL.position.set(-0.43, 1.45, 0);
-    armL.castShadow = true;
-    this.proceduralGroup.add(armL);
-    this.parts.armL = armL;
-
-    const armR = new THREE.Mesh(armGeo, hoodieMat);
-    armR.position.set(0.43, 1.45, 0);
-    armR.castShadow = true;
-    this.proceduralGroup.add(armR);
-    this.parts.armR = armR;
-
-    const handGeo = new THREE.SphereGeometry(0.09, 8, 8);
-    const handL = new THREE.Mesh(handGeo, skinMat);
-    handL.position.set(0, -0.68, 0);
-    armL.add(handL);
-
-    const handR = new THREE.Mesh(handGeo, skinMat);
-    handR.position.set(0, -0.68, 0);
-    armR.add(handR);
-
-    // ── Legs ──────────────────────────────────
-    const legGeo = new THREE.BoxGeometry(0.23, 0.7, 0.23);
-    legGeo.translate(0, -0.35, 0); // Pivot at hip
-
-    const legL = new THREE.Mesh(legGeo, pantsMat);
-    legL.position.set(-0.16, 0.7, 0);
-    legL.castShadow = true;
-    this.proceduralGroup.add(legL);
-    this.parts.legL = legL;
-
-    const legR = new THREE.Mesh(legGeo, pantsMat);
-    legR.position.set(0.16, 0.7, 0);
-    legR.castShadow = true;
-    this.proceduralGroup.add(legR);
-    this.parts.legR = legR;
-
-    // ── Shoes (Attached to Leg Pivots) ────────
-    const shoeLMain = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 0.34), shoeMat);
-    shoeLMain.position.set(0, -0.68, 0.05);
-
-    const soleL = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.04, 0.35), glowSoleMat);
-    soleL.position.set(0, -0.74, 0.05);
-    legL.add(soleL);
-    legL.add(shoeLMain);
-
-    const shoeRMain = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 0.34), shoeMat);
-    shoeRMain.position.set(0, -0.68, 0.05);
-
-    const soleR = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.04, 0.35), glowSoleMat);
-    soleR.position.set(0, -0.74, 0.05);
-    legR.add(soleR);
-    legR.add(shoeRMain);
-  }
-
-  private createDustPool() {
-    const geo = new THREE.SphereGeometry(0.08, 6, 6);
-    for (let i = 0; i < 16; i++) {
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const p = new THREE.Mesh(geo, mat);
-      p.visible = false;
-      this.scene.add(p);
-      this.dustParticles.push(p);
-    }
-  }
-
-  private dustIdx = 0;
-
-  private spawnDust(pos: THREE.Vector3, isRunning = false) {
-    const count = isRunning ? 3 : 2;
-    for (let s = 0; s < count; s++) {
-      const p = this.dustParticles[this.dustIdx];
-      this.dustIdx = (this.dustIdx + 1) % this.dustParticles.length;
-      if (!p) continue;
-      // Spawn tight cartoon dust puffs right at the soles of the shoes
-      Character.dustVec.set(
-        (Math.random() - 0.5) * (isRunning ? 0.16 : 0.08),
-        0.02,
-        (Math.random() - 0.5) * (isRunning ? 0.16 : 0.08)
-      );
-      p.position.copy(pos).add(Character.dustVec);
-      const startScale = isRunning ? 0.8 : 0.5;
-      p.scale.setScalar(startScale);
-      const mat = p.material as THREE.MeshBasicMaterial;
-      mat.opacity = isRunning ? 0.65 : 0.45;
-      mat.color.setHex(0xffffff);
-      p.visible = true;
-    }
-  }
-
-  private updateDust(dt: number) {
-    for (let i = 0; i < this.dustParticles.length; i++) {
-      const p = this.dustParticles[i];
-      if (!p.visible) continue;
-      const mat = p.material as THREE.MeshBasicMaterial;
-      mat.opacity -= dt * 2.8;
-      p.position.y += dt * 0.45;
-      p.scale.multiplyScalar(0.93);
-      if (mat.opacity <= 0) {
-        p.visible = false;
-      }
-    }
-  }
-
-  private playAnimation(actionName: string, fadeDuration = 0.2) {
-    if (!this.mixer || this.currentActionName === actionName) return;
-    const nextAction = this.animations.get(actionName) || this.animations.get(`${actionName}_01`);
-    if (!nextAction) return;
-
-    const currentAction = this.animations.get(this.currentActionName);
-    if (currentAction) {
-      currentAction.fadeOut(fadeDuration);
-    }
-    nextAction.reset().fadeIn(fadeDuration).play();
-    this.currentActionName = actionName;
-  }
-
-  // Jump & Gravity Physics
+  private animations = new Map<string, THREE.AnimationAction>();
+  private weights = { idle: 1, walk: 0, run: 0, jump: 0 };
+  private referenceSpeeds = { walk: 1.4, run: 3.5 };
+  private footProbes: { mesh: THREE.SkinnedMesh; indices: number[] }[] = [];
+  private footPoint = new THREE.Vector3();
+  private gaitPhase = 0;
+  private idleTime = 0;
+  private jumpHeld = false;
   private jumpVelocity = 0;
   private isGrounded = true;
   private posY = 0;
+  private landing = 0;
+  private stepDistance = 0;
+  readonly ready: Promise<void>;
+
+  speed = 6;
+  runSpeed = 11;
+  direction = new THREE.Vector3(0, 0, -1);
+  velocity = new THREE.Vector3();
+  isMoving = false;
+  isRunning = false;
+  targetRotY = Math.PI;
+
+  constructor(
+    private scene: THREE.Scene,
+    detailed = true,
+    private manager = THREE.DefaultLoadingManager,
+    private onAvatarStatus: (status: AvatarStatus) => void = () => {},
+  ) {
+    // Only shown if the rig cannot load; quality settings all use the same animated model.
+    this.buildFallback();
+    this.group.add(this.visual, this.fallback);
+    scene.add(this.group);
+    this.group.position.set(0, 0, 3);
+    this.setRotationY(Math.PI);
+    this.ready = this.setDetailed(detailed);
+  }
+
+  /** Quality changes shading only. Never replace the rig or reset movement/animation. */
+  setDetailed(detailed: boolean): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    this.detailedRequested = detailed;
+    if (this.loadedModel) {
+      this.applyDetail();
+      return detailed ? this.ensureDetails() : Promise.resolve();
+    }
+    if (!this.baseLoad) {
+      this.onAvatarStatus("loading");
+      this.baseLoad = this.loadCharacterModel().finally(() => { this.baseLoad = null; });
+    }
+    return this.baseLoad;
+  }
+
+  private async loadCharacterModel() {
+    const assets = await Promise.allSettled([
+      new GLTFLoader(this.manager).setMeshoptDecoder(MeshoptDecoder).loadAsync("/models/avatar.meshopt.glb"),
+      new THREE.TextureLoader(this.manager).loadAsync("/textures/character/avatar-color.webp"),
+    ] as const);
+    const [modelResult, colorResult] = assets;
+    if (this.disposed || modelResult.status === "rejected" || colorResult.status === "rejected") {
+      assets.forEach(asset => {
+        if (asset.status !== "fulfilled") return;
+        if (asset.value instanceof THREE.Texture) asset.value.dispose();
+        else disposeObject(asset.value.scene);
+      });
+      if (!this.disposed) this.onAvatarStatus("error");
+      return;
+    }
+    const gltf = modelResult.value;
+    const color = colorResult.value;
+    color.colorSpace = THREE.SRGBColorSpace;
+    // Textures retain the source FBX UV orientation.
+    color.flipY = true;
+    this.material = new THREE.MeshStandardMaterial({ map: color, roughness: 0.85, metalness: 0 });
+    const originalMaterials = new Set<THREE.Material>();
+    gltf.scene.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      (Array.isArray(child.material) ? child.material : [child.material]).forEach(mat => originalMaterials.add(mat));
+      child.material = this.material!;
+      child.castShadow = true;
+      child.receiveShadow = false;
+    });
+    originalMaterials.forEach(mat => {
+      Object.values(mat).forEach(value => { if (value instanceof THREE.Texture) value.dispose(); });
+      mat.dispose();
+    });
+    this.mixer = new THREE.AnimationMixer(gltf.scene);
+    gltf.animations.forEach(clip => {
+      const action = this.mixer!.clipAction(clip);
+      // Explicit time/weight control keeps walk and run on the same stride phase.
+      action.play();
+      action.paused = true;
+      action.setEffectiveWeight(clip.name === "idle" ? 1 : 0);
+      this.animations.set(clip.name, action);
+    });
+    this.mixer.update(0);
+    gltf.scene.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(gltf.scene, true);
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+    gltf.scene.traverse(child => {
+      if (!(child instanceof THREE.SkinnedMesh)) return;
+      const candidates: number[] = [];
+      for (let i = 0; i < child.geometry.attributes.position.count; i++) {
+        child.getVertexPosition(i, this.footPoint).applyMatrix4(child.matrixWorld);
+        if (this.footPoint.y <= bounds.min.y + 0.08) candidates.push(i);
+      }
+      // A small sole sample corrects blended poses without scanning the full mesh each frame.
+      const count = Math.min(candidates.length, 96);
+      this.footProbes.push({ mesh: child, indices: Array.from({ length: count }, (_, i) => candidates[Math.floor(i * candidates.length / count)]) });
+    });
+    const wrapper = new THREE.Group();
+    // Ground correction is animated on AvatarGround; never overwrite that transform.
+    wrapper.position.set(-center.x, -bounds.min.y, -center.z);
+    wrapper.add(gltf.scene);
+    const normalized = new THREE.Group();
+    const scale = HEIGHT / (size.y || HEIGHT);
+    normalized.scale.setScalar(scale);
+    normalized.add(wrapper);
+    const calibration = gltf.scene.getObjectByName("AvatarGround")?.userData.locomotion;
+    if (calibration?.walk > 0 && calibration?.run > 0) {
+      this.referenceSpeeds = { walk: calibration.walk * scale, run: calibration.run * scale };
+    }
+    this.loadedModel = normalized;
+    this.visual.add(normalized);
+    this.fallback.visible = false;
+    this.onAvatarStatus("ready");
+    if (this.detailedRequested) await this.ensureDetails();
+  }
+
+  private ensureDetails(): Promise<void> {
+    if (this.detailMaps.length || this.disposed) return Promise.resolve();
+    if (!this.detailLoad) {
+      this.detailLoad = this.loadDetails().finally(() => { this.detailLoad = null; });
+    }
+    return this.detailLoad;
+  }
+
+  private async loadDetails() {
+    const loader = new THREE.TextureLoader(this.manager);
+    const results = await Promise.allSettled([
+      loader.loadAsync("/textures/character/avatar-normal.webp"),
+      loader.loadAsync("/textures/character/avatar-roughness.webp"),
+    ]);
+    if (this.disposed || results.some(result => result.status === "rejected")) {
+      results.forEach(result => { if (result.status === "fulfilled") result.value.dispose(); });
+      // Optional surface detail failure leaves the fully animated base avatar usable.
+      return;
+    }
+    this.detailMaps = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+    this.detailMaps.forEach(texture => { texture.flipY = true; });
+    this.applyDetail();
+  }
+
+  private applyDetail() {
+    if (!this.material) return;
+    this.material.normalMap = this.detailedRequested ? this.detailMaps[0] ?? null : null;
+    this.material.roughnessMap = this.detailedRequested ? this.detailMaps[1] ?? null : null;
+    this.material.normalScale.setScalar(0.55);
+    this.material.needsUpdate = true;
+  }
+
+  private buildFallback() {
+    const skin = new THREE.MeshStandardMaterial({ color: 0xc58d68, roughness: 0.9 });
+    const tee = new THREE.MeshStandardMaterial({ color: 0xd6b261, roughness: 0.95 });
+    const shorts = new THREE.MeshStandardMaterial({ color: 0xb77b4b, roughness: 0.95 });
+    const hair = new THREE.MeshStandardMaterial({ color: 0x352c25, roughness: 1 });
+    const add = (geometry: THREE.BufferGeometry, material: THREE.Material, x: number, y: number) => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(x, y, 0);
+      mesh.castShadow = true;
+      this.fallback.add(mesh);
+    };
+    add(new THREE.SphereGeometry(0.38, 12, 8), skin, 0, 1.98);
+    add(new THREE.SphereGeometry(0.39, 12, 8, 0, Math.PI * 2, 0, 1.2), hair, 0, 2.02);
+    add(new THREE.CapsuleGeometry(0.25, 0.42, 3, 8), tee, 0, 1.23);
+    for (const side of [-1, 1]) {
+      add(new THREE.CapsuleGeometry(0.1, 0.5, 3, 8), skin, side * 0.36, 1.17);
+      add(new THREE.CapsuleGeometry(0.13, 0.2, 3, 8), shorts, side * 0.16, 0.66);
+      add(new THREE.CapsuleGeometry(0.085, 0.3, 3, 8), skin, side * 0.16, 0.235);
+    }
+  }
+
+  stopMovement() {
+    this.velocity.x = this.velocity.z = 0;
+    this.isMoving = this.isRunning = false;
+    this.stepDistance = 0;
+  }
 
   setPosition(x: number, y: number, z: number, rotY?: number) {
+    this.stopMovement();
+    this.jumpVelocity = 0;
+    this.jumpHeld = false;
+    this.isGrounded = y <= 0;
     this.group.position.set(x, y, z);
     this.posY = y;
-    if (rotY !== undefined) {
-      this.setRotationY(rotY);
-    }
+    this.landing = 0;
+    this.weights = { idle: 1, walk: 0, run: 0, jump: 0 };
+    this.visual.scale.setScalar(1);
+    if (rotY !== undefined) this.setRotationY(rotY);
+    this.updateAnimation(0, 0);
+    this.groundVisual();
   }
 
   setRotationY(rotY: number) {
@@ -542,202 +233,182 @@ export class Character {
     this.direction.set(Math.sin(rotY), 0, Math.cos(rotY));
   }
 
+  private updateAnimation(dt: number, horizontalSpeed: number) {
+    if (!this.mixer) return;
+    const { walk, run } = this.referenceSpeeds;
+    const runBlend = THREE.MathUtils.smoothstep(horizontalSpeed, walk * 1.15, run * 1.1);
+    const moving = THREE.MathUtils.smoothstep(horizontalSpeed, 0.025, 0.35);
+    const airborne = this.isGrounded ? 0 : 1;
+    const target = {
+      idle: (1 - moving) * (1 - airborne),
+      walk: moving * (1 - runBlend) * (1 - airborne),
+      run: moving * runBlend * (1 - airborne),
+      jump: airborne,
+    };
+    const blend = 1 - Math.exp(-BLEND_RATE * dt);
+    this.idleTime += dt;
+    const stride = THREE.MathUtils.lerp(walk * (this.animations.get("walk")?.getClip().duration ?? 1),
+      run * (this.animations.get("run")?.getClip().duration ?? 1), runBlend);
+    // Advance by distance; stop/start and walk/run changes cannot reset a foot mid-stride.
+    this.gaitPhase = (this.gaitPhase + horizontalSpeed * dt / Math.max(stride, 0.1)) % 1;
+    for (const name of ["idle", "walk", "run", "jump"] as const) {
+      this.weights[name] += (target[name] - this.weights[name]) * blend;
+      const action = this.animations.get(name);
+      if (!action) continue;
+      const duration = action.getClip().duration;
+      if (name === "idle") action.time = this.idleTime % duration;
+      else if (name === "jump") {
+        if (!this.isGrounded) {
+          const progress = THREE.MathUtils.clamp((JUMP_SPEED - this.jumpVelocity) / (JUMP_SPEED * 2), 0, 1);
+          action.time = duration * (0.16 + progress * 0.72);
+        }
+      } else action.time = this.gaitPhase * duration;
+      action.setEffectiveWeight(this.weights[name]);
+    }
+    this.mixer.update(0);
+  }
+
+  private groundVisual() {
+    if (!this.footProbes.length) return;
+    this.visual.position.y = 0;
+    this.group.updateMatrixWorld(true);
+    let minY = Infinity;
+    for (const { mesh, indices } of this.footProbes) {
+      for (const index of indices) {
+        mesh.getVertexPosition(index, this.footPoint).applyMatrix4(mesh.matrixWorld);
+        minY = Math.min(minY, this.footPoint.y);
+      }
+    }
+    if (Number.isFinite(minY)) this.visual.position.y = THREE.MathUtils.clamp(this.group.position.y - minY, -0.12, 0.12);
+  }
+
   update(
     keys: Set<string>,
     joystick: { x: number; y: number },
     delta: number,
-    elapsed: number,
-    _cameraYaw: number,
-    surface: "wood" | "asphalt" = "wood"
+    _elapsed: number,
+    cameraYaw: number,
+    surface: "wood" | "asphalt" | "stone" = "wood",
+    deferVisual = false,
   ) {
-    const dt = Math.min(delta / 1000, 0.1); // cap max dt to prevent physics tunneling
-    this.updateDust(dt);
-
-    if (this.mixer) {
-      this.mixer.update(dt);
-    }
-
-    // ── Spacebar Jump Trigger ─────────────────
-    const isSpace = keys.has("Space") || keys.has("Spacebar");
-    if (isSpace && this.isGrounded) {
-      this.jumpVelocity = 9.5;
+    const dt = Math.min(delta / 1000, 0.1);
+    const jumpPressed = keys.has("Space") || keys.has("Spacebar");
+    if (jumpPressed && !this.jumpHeld && this.isGrounded) {
+      this.jumpVelocity = JUMP_SPEED;
       this.isGrounded = false;
       sound.playJump();
-      this.spawnDust(this.group.position, true);
     }
-
-    // ── Gravity Physics Calculation ──────────
+    this.jumpHeld = jumpPressed;
     if (!this.isGrounded) {
-      this.jumpVelocity -= 26.0 * dt;
-      this.posY += this.jumpVelocity * dt;
+      // Analytic vertical integration avoids different jump heights at 30 and 60 fps.
+      this.posY += this.jumpVelocity * dt - 0.5 * GRAVITY * dt * dt;
+      this.jumpVelocity -= GRAVITY * dt;
       if (this.posY <= 0) {
-        this.posY = 0;
-        this.jumpVelocity = 0;
+        this.posY = this.jumpVelocity = 0;
         this.isGrounded = true;
-        this.spawnDust(this.group.position, false);
+        this.landing = 1;
+        this.stepDistance = 0;
+        sound.playFootstep(surface === "stone" ? "asphalt" : surface);
       }
     }
-
-    let moveX = 0;
-    let moveZ = 0;
-
-    if (keys.has("KeyW") || keys.has("ArrowUp")) moveZ -= 1;
-    if (keys.has("KeyS") || keys.has("ArrowDown")) moveZ += 1;
-    if (keys.has("KeyA") || keys.has("ArrowLeft")) moveX -= 1;
-    if (keys.has("KeyD") || keys.has("ArrowRight")) moveX += 1;
-
-    moveX += joystick.x;
-    moveZ += joystick.y;
-
-    const isRunning = keys.has("ShiftLeft") || keys.has("ShiftRight");
-    const spd = isRunning ? this.runSpeed : this.speed;
-    this.isMoving = moveX !== 0 || moveZ !== 0;
-    this.isRunning = isRunning && this.isMoving;
-
-    if (this.isMoving) {
-      const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
-      const nx = moveX / len;
-      const nz = moveZ / len;
-
-      this.group.position.x += nx * spd * dt;
-      this.group.position.z += nz * spd * dt;
+    let moveX = Number(keys.has("KeyD") || keys.has("ArrowRight")) - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
+    let moveZ = Number(keys.has("KeyS") || keys.has("ArrowDown")) - Number(keys.has("KeyW") || keys.has("ArrowUp"));
+    const cameraRelative = surface !== "asphalt";
+    const stickLength = Math.hypot(joystick.x, joystick.y);
+    const stickStrength = cameraRelative ? THREE.MathUtils.clamp((stickLength - 0.12) / 0.88, 0, 1) : stickLength;
+    if (stickLength > 0) {
+      moveX += joystick.x / stickLength * stickStrength;
+      moveZ += joystick.y / stickLength * stickStrength;
+    }
+    const length = Math.hypot(moveX, moveZ);
+    const strength = Math.min(1, length);
+    let nx = length > 0 ? moveX / length : 0;
+    let nz = length > 0 ? moveZ / length : 0;
+    if (cameraRelative) {
+      const x = nx * Math.cos(cameraYaw) + nz * Math.sin(cameraYaw);
+      nz = nz * Math.cos(cameraYaw) - nx * Math.sin(cameraYaw);
+      nx = x;
+    }
+    const wantsRun = keys.has("ShiftLeft") || keys.has("ShiftRight");
+    const spd = cameraRelative
+      ? (surface === "stone" ? (wantsRun ? 8 : 5.2) : (wantsRun ? 6.5 : 4.2))
+      : (wantsRun ? this.runSpeed : this.speed);
+    if (cameraRelative) {
+      const rate = length > 0 ? 12 : 22;
+      const blend = 1 - Math.exp(-rate * dt);
+      const targetX = nx * spd * strength;
+      const targetZ = nz * spd * strength;
+      this.group.position.x += targetX * dt + (this.velocity.x - targetX) * blend / rate;
+      this.group.position.z += targetZ * dt + (this.velocity.z - targetZ) * blend / rate;
+      this.velocity.x += (targetX - this.velocity.x) * blend;
+      this.velocity.z += (targetZ - this.velocity.z) * blend;
+      if (length === 0 && Math.hypot(this.velocity.x, this.velocity.z) < 0.025) this.velocity.x = this.velocity.z = 0;
+    } else {
       this.velocity.set(nx * spd, this.jumpVelocity, nz * spd);
-
-      // Face movement direction smoothly
+      this.group.position.x += this.velocity.x * dt;
+      this.group.position.z += this.velocity.z * dt;
+    }
+    this.velocity.y = this.jumpVelocity;
+    const horizontalSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    this.isMoving = horizontalSpeed > 0.05;
+    this.isRunning = wantsRun && horizontalSpeed > (cameraRelative ? 4.5 : this.speed);
+    if (this.isMoving) {
+      nx = this.velocity.x / horizontalSpeed;
+      nz = this.velocity.z / horizontalSpeed;
       this.targetRotY = Math.atan2(nx, nz);
       this.direction.set(nx, 0, nz);
-
-      // Frame-rate independent footstep audio & particle triggering
-      const stepInterval = isRunning ? 0.22 : 0.38;
-      this.stepTimer += dt;
-      if (this.stepTimer >= stepInterval && this.isGrounded) {
-        this.stepTimer -= stepInterval;
-        sound.playFootstep(surface);
-        this.spawnDust(this.group.position, isRunning);
-      }
-
-      // Forward lean angle when sprinting vs running
-      this.currentTiltX = THREE.MathUtils.lerp(this.currentTiltX, isRunning ? 0.22 : 0.08, dt * 10);
-
-      if (this.mixer) {
-        if (!this.isGrounded) {
-          this.playAnimation("jump", 0.1);
-        } else {
-          this.playAnimation(isRunning ? "run" : "walk");
-        }
-      }
-    } else {
-      this.velocity.set(0, this.jumpVelocity, 0);
-      this.currentTiltX = THREE.MathUtils.lerp(this.currentTiltX, 0, dt * 8);
-      this.stepTimer = 0;
-
-      if (this.mixer) {
-        if (!this.isGrounded) {
-          this.playAnimation("jump", 0.1);
-        } else {
-          this.playAnimation("idle");
-        }
-      }
     }
-
-    // Apply vertical jump position to group
     this.group.position.y = this.posY;
+    const angle = THREE.MathUtils.euclideanModulo(this.targetRotY - this.group.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
+    this.group.rotation.y += angle * (1 - Math.exp(-14 * dt));
+    this.landing *= Math.exp(-18 * dt);
+    this.visual.scale.set(1 + this.landing * 0.012, 1 - this.landing * 0.025, 1 + this.landing * 0.012);
+    if (!deferVisual) this.finishVisual(dt, horizontalSpeed, surface);
+  }
 
-    // Smooth, frame-rate independent rotation dampening
-    const dAngle = this.targetRotY - this.group.rotation.y;
-    const wrappedAngle = ((dAngle + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-    const rotDamp = 1 - Math.exp(-14 * dt);
-    this.group.rotation.y += wrappedAngle * rotDamp;
+  /** Use actual travel after collision resolution so the feet stop at walls and furniture. */
+  resolveMovement(startX: number, startZ: number, intendedX: number, intendedZ: number, delta: number, surface: "wood" | "asphalt" | "stone") {
+    const requestedSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    if (Math.abs(this.group.position.x - intendedX) > 1e-5) this.velocity.x = 0;
+    if (Math.abs(this.group.position.z - intendedZ) > 1e-5) this.velocity.z = 0;
+    const dt = Math.min(delta / 1000, 0.1);
+    const speed = dt > 0 ? Math.min(requestedSpeed, Math.hypot(this.group.position.x - startX, this.group.position.z - startZ) / dt) : 0;
+    this.isMoving = speed > 0.05;
+    this.isRunning = this.isRunning && this.isMoving;
+    this.finishVisual(dt, speed, surface);
+  }
 
-    const t = elapsed / 1000;
-
-    // ── GLTF Model Locomotion Physics (Walk & Run Body Motion) ──
-    if (this.loadedModel && !this.mixer) {
-      if (this.isMoving) {
-        const freq = isRunning ? 16 : 10;
-
-        // Hip Roll / Leg Stride Wobble (side to side)
-        this.gltfGroup.rotation.z = Math.sin(t * freq) * (isRunning ? 0.16 : 0.08);
-
-        // Shoulder / Torso / Arm Swinging Counter-Twist (yaw rotation)
-        this.gltfGroup.rotation.y = Math.sin(t * freq * 0.5) * (isRunning ? 0.22 : 0.12);
-
-        // Stride Pitch / Step Lean (x-axis pitch)
-        this.gltfGroup.rotation.x = this.currentTiltX + Math.sin(t * freq) * (isRunning ? 0.08 : 0.04);
-
-        // Vertical step compression & bounce
-        const stepBounce = Math.abs(Math.sin(t * freq)) * (isRunning ? 0.18 : 0.08);
-        this.gltfGroup.position.y = this.isGrounded ? stepBounce : 0;
-
-        // Dynamic Squash & Stretch on step impact
-        const squash = Math.sin(t * freq * 2);
-        this.gltfGroup.scale.y = 1 + squash * (isRunning ? 0.05 : 0.02);
-        this.gltfGroup.scale.x = 1 - squash * (isRunning ? 0.03 : 0.01);
-      } else {
-        this.gltfGroup.rotation.z = THREE.MathUtils.lerp(this.gltfGroup.rotation.z, 0, dt * 8);
-        this.gltfGroup.rotation.x = THREE.MathUtils.lerp(this.gltfGroup.rotation.x, 0, dt * 8);
-        this.gltfGroup.rotation.y = THREE.MathUtils.lerp(this.gltfGroup.rotation.y, 0, dt * 8);
-        this.gltfGroup.position.y = Math.sin(t * 2) * 0.02;
-        this.gltfGroup.scale.set(1, 1, 1);
+  private finishVisual(dt: number, speed: number, surface: "wood" | "asphalt" | "stone") {
+    if (this.isGrounded && speed > 0.05) {
+      const { walk, run } = this.referenceSpeeds;
+      const runBlend = THREE.MathUtils.smoothstep(speed, walk * 1.15, run * 1.1);
+      const stride = THREE.MathUtils.lerp(walk * (this.animations.get("walk")?.getClip().duration ?? 1),
+        run * (this.animations.get("run")?.getClip().duration ?? 1), runBlend);
+      const stepLength = stride / 2;
+      this.stepDistance += speed * dt;
+      if (this.stepDistance >= stepLength) {
+        this.stepDistance %= stepLength;
+        sound.playFootstep(surface === "stone" ? "asphalt" : surface);
       }
-    }
-
-    // ── Procedural Model Limb Animation (Legs AND Arms swing naturally when walking and running) ──
-    if (this.proceduralGroup.visible) {
-      this.proceduralGroup.rotation.x = this.currentTiltX;
-      const legL = this.parts.legL as THREE.Mesh;
-      const legR = this.parts.legR as THREE.Mesh;
-      const armL = this.parts.armL as THREE.Mesh;
-      const armR = this.parts.armR as THREE.Mesh;
-      const torsoGroup = this.parts.torsoGroup as THREE.Group;
-      const headGroup = this.parts.headGroup as THREE.Group;
-
-      if (this.isMoving) {
-        const freq = isRunning ? 16 : 10;
-
-        // Legs swing (Left leg & Right leg opposite phase)
-        legL.rotation.x = Math.sin(t * freq) * (isRunning ? 1.15 : 0.70);
-        legR.rotation.x = -Math.sin(t * freq) * (isRunning ? 1.15 : 0.70);
-
-        // Arms swing (Opposite to legs: Right arm swings forward with Left leg, Left arm swings forward with Right leg!)
-        armL.rotation.x = -Math.sin(t * freq) * (isRunning ? 0.95 : 0.60);
-        armR.rotation.x = Math.sin(t * freq) * (isRunning ? 0.95 : 0.60);
-
-        // Torso & Head natural sway
-        torsoGroup.rotation.z = Math.sin(t * freq) * (isRunning ? 0.08 : 0.04);
-        if (headGroup) headGroup.rotation.y = Math.sin(t * freq * 0.5) * (isRunning ? 0.12 : 0.06);
-
-        if (this.isGrounded) {
-          this.proceduralGroup.position.y = Math.abs(Math.sin(t * freq)) * (isRunning ? 0.12 : 0.06);
-        } else {
-          this.proceduralGroup.position.y = 0;
-        }
-      } else {
-        torsoGroup.position.y = Math.sin(t * 1.8) * 0.015;
-        if (headGroup) headGroup.rotation.y = THREE.MathUtils.lerp(headGroup.rotation.y, 0, dt * 8);
-        torsoGroup.rotation.z = THREE.MathUtils.lerp(torsoGroup.rotation.z, 0, dt * 8);
-        legL.rotation.x = THREE.MathUtils.lerp(legL.rotation.x, 0, dt * 10);
-        legR.rotation.x = THREE.MathUtils.lerp(legR.rotation.x, 0, dt * 10);
-        armL.rotation.x = THREE.MathUtils.lerp(armL.rotation.x, 0, dt * 10);
-        armR.rotation.x = THREE.MathUtils.lerp(armR.rotation.x, 0, dt * 10);
-        this.proceduralGroup.position.y = 0;
-      }
-    }
+    } else this.stepDistance = 0;
+    this.updateAnimation(dt, speed);
+    this.groundVisual();
   }
 
   dispose() {
     this.disposed = true;
     this.scene.remove(this.group);
-    this.dustParticles.forEach((p) => {
-      this.scene.remove(p);
-      p.geometry.dispose();
-      (p.material as THREE.Material).dispose();
-    });
-    this.dustParticles = [];
-    if (this.mixer) {
-      this.mixer.stopAllAction();
-      this.mixer = null;
-    }
+    this.mixer?.stopAllAction();
+    if (this.mixer && this.loadedModel) this.mixer.uncacheRoot(this.mixer.getRoot());
+    this.mixer = null;
+    const skeletons = new Set<THREE.Skeleton>();
+    this.group.traverse(child => { if (child instanceof THREE.SkinnedMesh) skeletons.add(child.skeleton); });
+    skeletons.forEach(skeleton => skeleton.dispose());
+    this.footProbes = [];
+    // Detach cached maps so each resource has one clear owner, including in Lite mode.
+    if (this.material) this.material.normalMap = this.material.roughnessMap = null;
+    this.detailMaps.forEach(texture => texture.dispose());
+    this.detailMaps = [];
     disposeObject(this.group);
   }
 }

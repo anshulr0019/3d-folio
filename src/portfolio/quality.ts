@@ -1,16 +1,14 @@
+import { prefersLightweightExperience } from "./deviceBudget";
+
 export type Quality = "auto" | "low" | "balanced" | "high";
 export type RenderQuality = Exclude<Quality, "auto">;
 export const QUALITY_LABELS: Record<Quality, string> = {
   auto: "Auto · device aware", low: "Lite · battery friendly",
-  balanced: "Balanced · more detail", high: "High · full avatar & effects",
+  balanced: "Balanced · more detail", high: "High · surface detail & effects",
 };
 export function resolveQuality(quality: Quality): RenderQuality {
   if (quality !== "auto") return quality;
-  const device = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean; effectiveType?: string } };
-  if (device.connection?.saveData || /(^|-)2g$/.test(device.connection?.effectiveType ?? "") ||
-      (device.deviceMemory !== undefined && device.deviceMemory <= 4) ||
-      (device.hardwareConcurrency !== undefined && device.hardwareConcurrency <= 4) ||
-      matchMedia("(pointer: coarse)").matches || matchMedia("(prefers-reduced-motion: reduce)").matches) return "low";
+  if (prefersLightweightExperience()) return "low";
   return "balanced";
 }
 export function readQuality(): Quality {
