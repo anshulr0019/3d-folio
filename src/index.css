@@ -191,6 +191,49 @@ button { cursor: pointer; }
 .status-dot { display: inline-block; width: 6px; height: 6px; background: #537d36; border-radius: 50%; box-shadow: 0 0 0 4px #9bc57322; flex-shrink: 0; }
 .eyebrow-divider { margin-inline: 4px; color: #9ca895; }
 .hero-copy h1 { font-size: clamp(52px, 5.4vw, 83px); line-height: 1.04; letter-spacing: -.065em; font-weight: 600; margin: 28px 0; }
+.hero-title-line { display: block; }
+.hero-title-line > span { display: block; }
+
+/* First-visit entrance. Visible HTML is the default; reduced motion needs no reset. */
+@keyframes hero-line-enter {
+  from { transform: translateY(108%); }
+  to { transform: translateY(0); }
+}
+@keyframes hero-detail-enter {
+  from { opacity: 0; transform: translateY(var(--hero-detail-distance)); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hero-copy[data-intro="true"] {
+    --hero-detail-distance: 12px;
+    --hero-line-duration: 620ms;
+    --hero-detail-duration: 380ms;
+    --hero-enter-ease: cubic-bezier(.22, 1, .36, 1);
+  }
+  .hero-copy[data-intro="true"] .hero-title-line {
+    /* Leave room for descenders and the italic's overhang without changing line spacing. */
+    overflow: clip;
+    overflow-clip-margin: .12em;
+  }
+  .hero-copy[data-intro="true"] .hero-title-line > span {
+    animation: hero-line-enter var(--hero-line-duration) var(--hero-enter-ease) backwards;
+  }
+  .hero-copy[data-intro="true"] .hero-title-line:nth-child(2) > span { animation-delay: 80ms; }
+  .hero-copy[data-intro="true"] .hero-title-line:nth-child(3) > span { animation-delay: 160ms; }
+  .hero-copy[data-intro="true"] > :is(.eyebrow, .hero-intro, .hero-actions, .quiet-note) {
+    animation: hero-detail-enter var(--hero-detail-duration) var(--hero-enter-ease) backwards;
+  }
+  .hero-copy[data-intro="true"] > .hero-intro { animation-delay: 240ms; }
+  .hero-copy[data-intro="true"] > .hero-actions { animation-delay: 340ms; }
+  .hero-copy[data-intro="true"] > .quiet-note { animation-delay: 420ms; }
+}
+@media (max-width: 760px) and (prefers-reduced-motion: no-preference) {
+  .hero-copy[data-intro="true"] {
+    --hero-detail-distance: 6px;
+    --hero-line-duration: 460ms;
+    --hero-detail-duration: 280ms;
+  }
+}
 .portfolio-page em { font-family: Georgia, serif; font-weight: 400; letter-spacing: -.055em; }
 .hero-copy h1 em { color: #47704c; }
 .hero-outline { color: #768272; }
@@ -291,6 +334,7 @@ button { cursor: pointer; }
 .project-card { min-width: 0; }
 .project-art { position: relative; height: 290px; overflow: hidden; border-radius: 7px; padding: 24px; }
 .project-index { position: absolute; top: 20px; left: 22px; font: 7px 'JetBrains Mono', monospace; letter-spacing: .1em; opacity: .7; }
+.project-art-layer { width: 100%; height: 100%; }
 .project-0 .project-art { background: #edcfce; color: #7f3b4a; }
 .project-1 .project-art { background: #dce5ee; color: #24456e; }
 .project-2 .project-art { background: #dbe6b8; color: #3c5330; }
@@ -301,6 +345,46 @@ button { cursor: pointer; }
 .art-world { padding-top: 44px; }.art-world > span { font: 7px 'JetBrains Mono', monospace; letter-spacing: .08em; }.art-world strong { position: relative; display: block; font-size: 36px; line-height: 1.1; font-weight: 500; letter-spacing: -.05em; margin-top: 14px; }.art-world strong span { position: absolute; right: 0; top: 8px; font-size: 68px; color: #829d53; }.art-world i { display: block; margin-top: 26px; font: 13px Georgia, serif; }
 .project-body { padding: 23px 0 0; }.project-body h3 { font-size: 17px; font-weight: 600; letter-spacing: -.025em; }.project-body > p { font-size: 11px; line-height: 1.95; color: #697361; margin-top: 13px; min-height: 108px; }.tech-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 18px; }.tech-tags span { font: 8px 'JetBrains Mono', monospace; border: 1px solid #d0d8c6; border-radius: 4px; padding: 5px 7px; }.project-links { display: flex; justify-content: space-between; font-size: 10px; font-weight: 600; border-top: 1px solid #d6ddce; margin-top: 22px; padding-top: 17px; }.project-links a:hover, .text-action:hover { color: #547e37; }
 .journey-section { border-block: 1px solid #d9ded4; }.journey-stops { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; }.journey-stops button { text-align: left; border-top: 1px solid #bac8ae; padding-top: 20px; }.stop-number { display: flex; justify-content: space-between; align-items: center; font: 10px 'JetBrains Mono', monospace; color: #697a59; }.stop-number i { font-style: normal; font-size: 25px; }.journey-stops h3 { font-size: 14px; margin-top: 25px; font-weight: 600; }.journey-stops p { font-size: 10px; color: #697361; line-height: 1.8; margin-top: 10px; }
+.journey-stops > button { position: relative; --journey-progress: 1; }
+.journey-stops > button::before { content: ''; position: absolute; top: -1px; left: 0; width: 100%; height: 2px; background: #496d45; transform: scaleX(var(--journey-progress)); transform-origin: left; pointer-events: none; }
+.stop-number { transition: color 180ms ease-out; }
+.journey-stops > button.is-reached .stop-number,
+.journey-stops > button:is(:hover, :focus-visible) .stop-number { color: #284c32; }
+
+/* Small feedback shares a timing system; scroll timelines own their own targets. */
+.primary-action > span, .text-action > span, .nav-contact > span, .preview-enter, .stop-number > i {
+  display: inline-block;
+  transition: transform 180ms cubic-bezier(.22, 1, .36, 1);
+}
+.folio-nav nav > a:not(.nav-contact), .project-links :is(a, button), .social-links a, .text-action { position: relative; }
+.folio-nav nav > a:not(.nav-contact)::after, .project-links :is(a, button)::after, .social-links a::after, .text-action::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -3px; height: 1px; background: currentColor;
+  transform: scaleX(0); transform-origin: left; transition: transform 180ms ease-out; pointer-events: none;
+}
+.text-action::after { bottom: -1px; }
+.folio-nav nav > a:not(.nav-contact):is(:hover, :focus-visible)::after,
+.project-links :is(a, button):is(:hover, :focus-visible)::after,
+.social-links a:is(:hover, :focus-visible)::after,
+.text-action:is(:hover, :focus-visible)::after { transform: scaleX(1); }
+.nav-contact, .project-filters button, .contact-bottom button {
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out, transform 120ms ease-out;
+}
+.nav-contact:is(:hover, :focus-visible), .contact-bottom button:is(:hover, :focus-visible) { background-color: #e3e9d9; border-color: #819773; }
+.project-filters button:not([aria-pressed="true"]):is(:hover, :focus-visible) { background-color: #e1e7d7; border-color: #819773; }
+.contact-section h2 > a { transition: transform 180ms ease-out, background-color 120ms ease-out; }
+.contact-section h2 > a:is(:hover, :focus-visible) { background-color: #c6ed63; }
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .primary-action:is(:hover, :focus-visible) > span, .nav-contact:is(:hover, :focus-visible) > span,
+  .world-preview:is(:hover, :focus-visible) .preview-enter, .journey-stops > button:is(:hover, :focus-visible) .stop-number > i { transform: translate(3px, -3px); }
+  .text-action:is(:hover, :focus-visible) > span { transform: translateY(3px); }
+  .contact-section h2 > a:is(:hover, :focus-visible) { transform: rotate(-8deg); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .portfolio-page :is(.primary-action, .nav-contact, .project-filters button, .contact-bottom button):active { transform: scale(.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .portfolio-page .primary-action:hover { transform: none; }
+}
 .about-section { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; }.about-copy > p { font-size: 13px; line-height: 2; color: #616e58; margin-bottom: 20px; }.about-copy > p:first-child { font-size: 19px; letter-spacing: -.02em; color: #263f2c; line-height: 1.7; }.about-monogram { position: relative; margin-top: 45px; width: 145px; height: 145px; background: #e2e8d4; color: #82966d; border-radius: 50%; font-size: 90px; letter-spacing: -.09em; text-align: center; font-weight: 700; }.about-monogram span { font-size: 45px; position: absolute; right: -20px; bottom: -9px; color: #485f34; }.about-skills { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 28px; }.about-skills span { font-size: 9px; border: 1px solid #ccd6bd; padding: 9px 11px; border-radius: 5px; }.education-note { padding-top: 22px; border-top: 1px solid #d2dbc7; }.education-note > span { font: 8px 'JetBrains Mono', monospace; color: #768369; }.education-note strong { display: block; font-size: 13px; font-weight: 500; margin-top: 10px; }.education-note p { margin-top: 6px; font-size: 11px; color: #768369; }
 .contact-section { border-top: 1px solid #d9ded4; }.contact-section h2 { font-size: clamp(55px, 7vw, 100px); line-height: 1.03; }.contact-section h2 > a { display: inline-block; margin-left: 70px; vertical-align: top; font-size: .8em; background: var(--folio-green); width: 110px; height: 110px; border-radius: 50%; text-align: center; line-height: 110px; }.contact-bottom { display: flex; justify-content: space-between; gap: 25px; margin-top: 45px; font-size: 12px; }.contact-bottom > div { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }.contact-bottom button { font-size: 9px; border: 1px solid #cbd5bd; padding: 7px 10px; border-radius: 5px; }.social-links a { border-bottom: 1px solid #adbc9c; padding-bottom: 4px; }.folio-footer { border-top: 1px solid #d9ded4; padding-block: 30px; display: flex; justify-content: space-between; align-items: center; gap: 25px; font-size: 9px; color: #717f63; }.folio-footer .wordmark { color: #283f2e; font-size: 33px; }
 .skip-link { position: absolute; left: 20px; top: -100px; z-index: 100; background: #d5fa74; padding: 12px 20px; }.skip-link:focus { top: 10px; }

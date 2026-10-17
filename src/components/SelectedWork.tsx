@@ -88,6 +88,8 @@ export default function SelectedWork({
           start: "top top",
           end: () => `+=${Math.max(getDistance(), 1)}`,
           pin,
+          // Recreated on filtering: measure this pin before later section triggers.
+          refreshPriority: 1,
           scrub: 0.25,
           anticipatePin: 1,
           invalidateOnRefresh: true,
@@ -100,6 +102,19 @@ export default function SelectedWork({
       });
 
       if (tween.scrollTrigger) pinStartRef.current = tween.scrollTrigger.start;
+
+      // Move only the illustration layer; project descriptions and links stay steady.
+      cards.forEach(card => {
+        const art = card.querySelector<HTMLElement>(".project-art-layer");
+        if (!art || !window.matchMedia("(pointer: fine)").matches) return;
+        gsap.fromTo(art, { x: 24 }, {
+          x: -24, ease: "none",
+          scrollTrigger: {
+            trigger: card, containerAnimation: tween,
+            start: "left right", end: "right left", scrub: true,
+          },
+        });
+      });
 
       const resizeObserver = new ResizeObserver(() => ScrollTrigger.refresh());
       resizeObserver.observe(viewport);
@@ -226,13 +241,13 @@ export default function SelectedWork({
                     <span className="project-index">
                       {formatIndex(projectIndex + 1)} / {isWorld ? "INTERACTIVE EXPERIENCE" : "WEB APPLICATION"}
                     </span>
-                    {projectIndex === 0 ? (
+                    <div className="project-art-layer">{projectIndex === 0 ? (
                       <div className="art-date"><span>find your</span><strong>kind of<br /><em>connection.</em></strong><i>infyn ↗</i></div>
                     ) : projectIndex === 1 ? (
                       <div className="art-delivery"><span className="delivery-symbol">↗</span><strong>DeliveryWatch</strong><span>Your emails. On the radar.</span><div><i /> SPF <i /> DKIM <i /> DMARC</div></div>
                     ) : (
                       <div className="art-world"><span>EXPLORE / DISCOVER / PLAY</span><strong>A world<br />of my own<span>✳</span></strong><i>Built for the curious.</i></div>
-                    )}
+                    )}</div>
                   </div>
                   <div className="project-body">
                     <h3>{project.title}</h3>

@@ -4,6 +4,7 @@ import { WorldEntryOverlay } from "./components/WorldEntryOverlay";
 import SelectedWork from "./components/SelectedWork";
 import HeroWorldPreview from "./components/HeroWorldPreview";
 import { useSmoothScroll } from "./components/SmoothScrollProvider";
+import { usePortfolioMotion } from "./components/usePortfolioMotion";
 import { CONTENT } from "./portfolio/content";
 import { readQuality, type Quality } from "./portfolio/quality";
 import { prefersLightweightExperience } from "./portfolio/deviceBudget";
@@ -59,10 +60,12 @@ export default function App() {
   const [quality, setQuality] = useState<Quality>("auto");
   const [filter, setFilter] = useState("All work");
   const [copied, setCopied] = useState(false);
+  const [heroIntroPlayed, setHeroIntroPlayed] = useState(false);
   const [sourceRect, setSourceRect] = useState<DOMRect | null>(null);
   const portfolioRef = useRef<HTMLElement>(null);
   const portfolioScrollRef = useRef(0);
   const { start: startSmoothScroll, stop: stopSmoothScroll } = useSmoothScroll();
+  usePortfolioMotion(portfolioRef, mode === "portfolio");
 
   useEffect(() => {
     setQuality(readQuality());
@@ -76,6 +79,7 @@ export default function App() {
   /* ── Enter transition ────────────────────────── */
   const enterWorld = useCallback((e: MouseEvent<HTMLElement>) => {
     if (mode !== "portfolio") return;
+    setHeroIntroPlayed(true);
     loadWorld();
     portfolioScrollRef.current = window.scrollY;
     setSourceRect(e.currentTarget.getBoundingClientRect());
@@ -141,9 +145,18 @@ export default function App() {
           <a className="skip-link" href="#work">Skip to projects</a>
           <header className="folio-nav"><a className="wordmark" href="#home" aria-label="Anshul Kumar home">ak<span>®</span></a><nav aria-label="Main navigation"><a href="#work">Selected work</a><a href="#about">About</a><a className="nav-contact" href="#contact">Let's talk <span>↗</span></a></nav></header>
           <section id="home" className="folio-hero">
-            <div className="hero-copy">
+            <div
+              className="hero-copy"
+              data-intro={!heroIntroPlayed}
+              onFocusCapture={() => setHeroIntroPlayed(true)}
+              onPointerDownCapture={() => setHeroIntroPlayed(true)}
+            >
               <div className="eyebrow"><span className="status-dot" /> {CONTENT.about.location} <span className="eyebrow-divider">/</span> Open to opportunities</div>
-              <h1>I build things<br />for the <em>web.</em><br /><span className="hero-outline">And beyond.</span></h1>
+              <h1>
+                <span className="hero-title-line"><span>I build things </span></span>
+                <span className="hero-title-line"><span>for the <em>web.</em> </span></span>
+                <span className="hero-title-line"><span className="hero-outline">And beyond.</span></span>
+              </h1>
               <p className="hero-intro">I'm {CONTENT.brand.name}, a full-stack developer turning ideas into useful products and playful digital experiences.</p>
               <div className="hero-actions"><button className="primary-action" onClick={enterWorld} onPointerEnter={preloadWorld}>Enter my 3D world <span>↗</span></button><a className="text-action" href="#work">Explore my work <span>↓</span></a></div>
               <p className="quiet-note">Take the scenic route, or scroll straight to the work.</p>

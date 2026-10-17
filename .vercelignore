@@ -1,0 +1,11 @@
+node_modules/
+.git/
+.vercel/
+.env*
+.next/
+dist/
+out/
+assets-3d/
+docs/design/character/
+.DS_Store
+*.tsbuildinfo
