@@ -9,7 +9,11 @@ import ts from 'typescript';
 const require = createRequire(import.meta.url);
 const document = { createElement() {
   const commands = [];
-  const ctx = { fillRect(...args) { commands.push(['rect',this.fillStyle,...args]); }, fillText(...args) { commands.push(['text',this.font,this.fillStyle,...args]); } };
+  const ctx = {
+    fillRect(...args) { commands.push(['rect',this.fillStyle,...args]); },
+    fillText(...args) { commands.push(['text',this.font,this.fillStyle,...args]); },
+    measureText(text) { return { width: text.length * Number.parseFloat(this.font.split(' ')[1]) * 0.56 }; },
+  };
   return { commands, getContext: () => ctx };
 } };
 function load(file, overrides = {}) {
@@ -19,7 +23,17 @@ function load(file, overrides = {}) {
   return module.exports;
 }
 const { batchStudio } = load('../src/portfolio/batchStudio.ts', {three:THREE,'three/examples/jsm/utils/BufferGeometryUtils.js':{mergeGeometries}});
-const { buildStudio } = load('../src/portfolio/Studio.ts',{three:THREE,'three/examples/jsm/geometries/RoundedBoxGeometry.js':{RoundedBoxGeometry},'./batchStudio':{batchStudio}});
+const { createSignMaterial } = load('../src/portfolio/signMaterial.ts', {three:THREE});
+// Wide plaques, portrait posters and floor directions must preserve glyph proportions.
+for (const size of [[4.45,1.16],[1.8,2.3],[3.8,0.8],[1.2,0.25]]) {
+  const material = createSignMaterial(['A LONG STUDIO LABEL','SECOND LINE'],size);
+  const {width,height,commands}=material.map.image;
+  assert.ok(Math.abs(width-height*size[0]/size[1]) <= 1+size[0]/size[1]);
+  assert.ok(Math.max(width,height)<=1536,'Sign textures must stay within their memory cap');
+  assert.ok(commands.filter(c=>c[0]==='text').every(c=>c.length===6),'Never horizontally compress text with fillText(maxWidth)');
+  material.map.dispose();material.dispose();
+}
+const { buildStudio } = load('../src/portfolio/Studio.ts',{three:THREE,'three/examples/jsm/geometries/RoundedBoxGeometry.js':{RoundedBoxGeometry},'./batchStudio':{batchStudio},'./signMaterial':{createSignMaterial}});
 const { disposeObject } = load('../src/portfolio/dispose.ts',{three:THREE,gsap:{killTweensOf(){}}});
 function make(batchStatic) {
   const group = new THREE.Group();
@@ -30,6 +44,9 @@ function make(batchStatic) {
   return {group,...data};
 }
 const original=make(false), optimized=make(true);
+const signTextures=new Set();
+optimized.group.traverse(o=>{if(o.material?.map?.name.startsWith('Sign:'))signTextures.add(o.material.map);});
+const signPixels=[...signTextures].reduce((sum,t)=>sum+t.image.width*t.image.height,0);
 function stats(group) {
   const geometries = new Set(), buffers = new Set();
   let meshes=0, instances=0, triangles=0, bytes=0, unsharedBytes=0;
@@ -97,4 +114,4 @@ let expectedInstances=0,disposedInstances=0;
 optimized.group.traverse(o=>{if(o.isInstancedMesh){expectedInstances++;o.addEventListener('dispose',()=>disposedInstances++);}});
 disposeObject(optimized.group);assert.equal(disposedInstances,expectedInstances);
 disposeObject(original.group);
-console.log(JSON.stringify({result:'PASS: surface/material/shadow raycasts, root transforms, triangles, interaction ownership, zones, markers and instance cleanup',rays,before,after},null,2));
+console.log(JSON.stringify({result:'PASS: sign proportions/texture cap, surface/material/shadow raycasts, root transforms, triangles, interaction ownership, zones, markers and instance cleanup',rays,signTextures:signTextures.size,signPixels,before,after},null,2));

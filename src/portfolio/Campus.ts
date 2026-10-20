@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeom
 import { STUDIO } from "./Studio";
 import { PROJECT_EXHIBITS } from "./projectExhibits";
 import type { Zone } from "./World";
+import { createSignMaterial } from "./signMaterial";
 
 // Reference lock: extend the approved studio's oak/sage miniature architecture.
 // Borrow Bruno's compact landmarks, physical wayfinding and tactile composition;
@@ -41,19 +42,7 @@ export function buildCampus(group: THREE.Group, manager: THREE.LoadingManager, s
     mesh.rotation.x = -Math.PI / 2; mesh.position.set(x, 0.019, z); group.add(mesh);
   }
   function label(parent: THREE.Group, lines: string[], size: number[], pos: number[], color = "#253b34", bg = "#eee8d9") {
-    const canvas = document.createElement("canvas"); canvas.width = 1024;
-    canvas.height = lines.length === 1 ? 128 : 512;
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    lines.forEach((line, i) => {
-      ctx.fillStyle = color; ctx.textBaseline = "middle";
-      let fontSize = i === 0 ? 64 : 34;
-      do { ctx.font = `${i === 0 ? 600 : 400} ${fontSize--}px system-ui, sans-serif`; }
-      while (ctx.measureText(line).width > 920 && fontSize > 20);
-      ctx.fillText(line, 48, lines.length === 1 ? 64 : 95 + i * 95);
-    });
-    const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size[0], size[1]), new THREE.MeshBasicMaterial({ map: tex }));
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size[0], size[1]), createSignMaterial(lines, size, color, bg));
     mesh.position.set(pos[0], pos[1], pos[2]); parent.add(mesh); return mesh;
   }
   function zone(id: string, name: string, x: number, z: number, object: THREE.Object3D, color: number = STUDIO.forest, radius = 2.8) {
@@ -137,6 +126,7 @@ export function buildCampus(group: THREE.Group, manager: THREE.LoadingManager, s
     loader.load(project.preview, texture => {
       if (disposed) { texture.dispose(); return; }
       texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = 8;
       previewMaterial.map = texture; previewMaterial.color.setHex(0xffffff); previewMaterial.needsUpdate = true;
     });
     box(p, [7.8, 0.74, 0.16], [0, 4.75, 1.42], accent);

@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/dist/ScrollTrigger";
+import { createSignMaterial } from "../portfolio/signMaterial";
 
 type Point = [number, number, number];
 
@@ -72,25 +73,10 @@ function buildWorld(scene: THREE.Scene) {
   box(studio, [0.61, 0.045, 0.55], [0, 1.25, -0.08], colors.glass, 0.02);
   box(studio, [0.82, 0.08, 0.22], [0.03, 0.05, 0.79], colors.plaster, 0.02);
 
-  const signCanvas = document.createElement("canvas");
-  signCanvas.width = 256;
-  signCanvas.height = 64;
-  const signContext = signCanvas.getContext("2d");
-  if (signContext) {
-    signContext.fillStyle = "#42664d";
-    signContext.fillRect(0, 0, 256, 64);
-    signContext.fillStyle = "#f3f1d9";
-    signContext.font = "500 32px monospace";
-    signContext.textAlign = "center";
-    signContext.textBaseline = "middle";
-    signContext.fillText("THE STUDIO", 128, 33);
-    const texture = new THREE.CanvasTexture(signCanvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    textures.add(texture);
-    const signMaterial = new THREE.MeshBasicMaterial({ map: texture });
-    materials.add(signMaterial);
-    mesh(studio, new THREE.PlaneGeometry(0.96, 0.24), signMaterial, [0, 0.91, 0.572]);
-  }
+  const signMaterial = createSignMaterial(["THE STUDIO"], [0.96, 0.24], "#f3f1d9", "#42664d");
+  if (signMaterial.map) textures.add(signMaterial.map);
+  materials.add(signMaterial);
+  mesh(studio, new THREE.PlaneGeometry(0.96, 0.24), signMaterial, [0, 0.91, 0.572]);
 
   // A second creative space and a little arcade on the other side of the street.
   box(world, [1.04, 0.65, 0.94], [1.29, 0.53, -0.85], colors.plaster, 0.045);

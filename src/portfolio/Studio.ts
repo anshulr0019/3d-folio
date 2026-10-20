@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import type { Zone } from "./World";
 import { batchStudio } from "./batchStudio";
+import { createSignMaterial } from "./signMaterial";
 
 // Reference lock: the portfolio's sage/oak identity + the miniature composition
 // reviewed in Bruno Simon's world. All furniture is authored here at one scale.
@@ -47,22 +48,8 @@ export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, op
     parent.add(mesh);
     return mesh;
   }
-  function print(lines: string[], fg: string, bg: string, width = 768, height = 384) {
-    const canvas = document.createElement("canvas");
-    canvas.width = width; canvas.height = height;
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height);
-    lines.forEach((line, i) => {
-      ctx.fillStyle = fg;
-      ctx.font = `${i === 0 ? 600 : 400} ${i === 0 ? 65 : 29}px system-ui, sans-serif`;
-      ctx.fillText(line, 55, 100 + i * 68, width - 110);
-    });
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    return new THREE.MeshBasicMaterial({ map: texture });
-  }
-  function plaque(lines: string[], size: number[], pos: number[], fg = "#253b34", bg = "#eee8d9") {
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size[0], size[1]), print(lines, fg, bg));
+  function plaque(lines: string[], size: number[], pos: number[], fg = "#253b34", bg = "#eee8d9", uniform = false) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size[0], size[1]), createSignMaterial(lines, size, fg, bg, uniform));
     mesh.position.set(pos[0], pos[1], pos[2]); group.add(mesh); return mesh;
   }
   function shadow(x: number, z: number, sx: number, sz: number, opacity = 0.2) {
@@ -125,7 +112,7 @@ export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, op
   const windowFrame = new THREE.Group(); windowFrame.position.set(-7.8, 2.9, -0.8);
   windowFrame.rotation.y = Math.PI / 2; group.add(windowFrame);
   box(windowFrame, [5.0, 3.2, 0.14], [0, 0, 0], oak);
-  const sky = print([], "#fff", "#bed2c5");
+  const sky = new THREE.MeshBasicMaterial({ color: "#bed2c5" });
   box(windowFrame, [4.72, 2.92, 0.03], [0, 0, 0.09], sky);
   for (const x of [-0.8, 0.8]) box(windowFrame, [0.07, 3.0, 0.09], [x, 0, 0.14], linen);
   box(windowFrame, [4.8, 0.07, 0.09], [0, 0.15, 0.14], linen);
@@ -146,8 +133,8 @@ export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, op
     box(desk, [0.12, 1.38, 1.55], [x, 0.69, -5.2], forest);
   }
   box(desk, [2.55, 1.35, 0.13], [-4.2, 2.25, -5.6], ink, 0.08);
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.35, 1.15), print(
-    ["Hello, I'm Anshul.", "CREATIVE DEVELOPER", "Ideas → code → experiences"], "#dce8c5", "#203d32",
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.35, 1.15), createSignMaterial(
+    ["Hello, I'm Anshul.", "CREATIVE DEVELOPER", "Ideas → code → experiences"], [2.35, 1.15], "#dce8c5", "#203d32",
   ));
   screen.position.set(-4.2, 2.25, -5.525); group.add(screen);
   box(desk, [0.1, 0.32, 0.12], [-4.2, 1.65, -5.6], ink);
@@ -204,9 +191,9 @@ export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, op
   const arcade = new THREE.Group(); arcade.position.set(5.8, 0, 3.5); arcade.rotation.y = -0.35; group.add(arcade);
   box(arcade, [1.35, 2.65, 1.1], [0, 1.325, 0], forest, 0.1);
   box(arcade, [1.4, 0.35, 1.15], [0, 2.7, 0], oak);
-  const marquee = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.25), print(["SNAKE / 01"], "#e9dfc7", "#253b34", 768, 160));
+  const marquee = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.25), createSignMaterial(["SNAKE / 01"], [1.2, 0.25], "#e9dfc7", "#253b34"));
   marquee.position.set(0, 2.7, 0.585); arcade.add(marquee);
-  const gameScreen = new THREE.Mesh(new THREE.PlaneGeometry(1.06, 0.83), print(["PLAY", "TAKE A LITTLE BREAK"], "#dce8c5", "#1c3028"));
+  const gameScreen = new THREE.Mesh(new THREE.PlaneGeometry(1.06, 0.83), createSignMaterial(["PLAY", "TAKE A LITTLE BREAK"], [1.06, 0.83], "#dce8c5", "#1c3028"));
   gameScreen.position.set(0, 1.95, 0.56); arcade.add(gameScreen);
   box(arcade, [1.4, 0.14, 0.7], [0, 1.34, 0.55], oak);
   cylinder(arcade, 0.035, 0.2, [-0.3, 1.5, 0.67], ink);
@@ -219,7 +206,7 @@ export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, op
   box(group, [4.7, 1.4, 0.12], [-3.4, 3.9, -7.8], oak);
   plaque(["ANSHUL'S STUDIO", "BUILDING FOR THE WEB & BEYOND"], [4.45, 1.16], [-3.4, 3.9, -7.72]);
   box(group, [2.0, 2.5, 0.12], [2.1, 3.15, -7.8], oak);
-  plaque(["MAKE.", "SOMETHING", "USEFUL."], [1.8, 2.3], [2.1, 3.15, -7.72], "#e9dfc7", "#355c4b");
+  plaque(["MAKE.", "SOMETHING", "USEFUL."], [1.8, 2.3], [2.1, 3.15, -7.72], "#e9dfc7", "#355c4b", true);
   const exit = plaque(["PROJECT CAMPUS  →"], [3.8, 0.8], [0, 0.033, 6.6]);
   exit.rotation.x = -Math.PI / 2;
   box(group, [4.8, 0.025, 0.15], [0, 0.02, 7.55], forest, 0.01);
