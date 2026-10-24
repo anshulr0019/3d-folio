@@ -124,6 +124,18 @@ for (const step of [1000 / 60, 16.5, 16.8]) {
   const target = step * 600 * 30 / 1000;
   assert.ok(Math.abs(updates - beforeLite - target) <= 1, `Lite rendered ${updates - beforeLite} frames instead of approximately ${target}`);
 }
+// Every display callback must advance Balanced, including faster refresh rates and jitter.
+exp.quality = 'balanced'; exp.autoQuality = false; exp.sampleStart = time; exp.sampleFrames = 0;
+for (const hz of [60, 90, 120, 144]) {
+  const before = updates;
+  for (let i=0;i<120;i++) tick(1000/hz + (i%2 ? 0.3 : -0.3));
+  assert.equal(updates-before,120,`Balanced must not skip display frames at ${hz} Hz`);
+}
+exp.keys.add('KeyW'); exp.joystick.x=0.5;
+exp.setState('STREET',true);
+assert.ok(exp.keys.has('KeyW')); assert.equal(exp.joystick.x,0.5);
+exp.setState('MODAL'); assert.equal(exp.keys.size,0);assert.equal(exp.joystick.x,0);
+exp.state='ROOM';
 exp.keys.add('Space'); exp.joystick.x = 1;
 let contextEvents = 0;
 exp.on('contextLost', () => contextEvents++);

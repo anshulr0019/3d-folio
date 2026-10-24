@@ -107,7 +107,6 @@ export class Experience extends EventEmitter {
   private sampleFrames = 0;
   private slowSamples = 0;
   private renderBudget = new RenderBudget();
-  private lastShadowTime = -1000;
   private partyInterval: ReturnType<typeof setInterval> | null = null;
   private loadingManager = new THREE.LoadingManager();
 
@@ -338,24 +337,20 @@ export class Experience extends EventEmitter {
     if (!automatic) this.autoQuality = false;
     this.quality = quality;
     this.renderBudget.reset();
-    this.lastShadowTime = -1000;
     if (SETTINGS[quality].bloom && !this.composer) this.buildPostProcessing(this.canvas.clientWidth, this.canvas.clientHeight);
     if (!SETTINGS[quality].bloom) this.disposePostProcessing();
     this.world?.setQuality(quality);
     void this.character?.setDetailed(quality === "high");
     this.resize();
     this.slowSamples = 0;
+    this.sampleStart = performance.now(); this.sampleFrames = 0;
     this.emit("qualityChange", quality);
   }
 
   private render() {
     this.renderer.info.reset();
-    // Refresh the shadow pass at 30 Hz; the scene and avatar still render at 60 Hz.
-    const shadowTime = performance.now();
-    if (this.quality !== "low" && shadowTime - this.lastShadowTime >= 1000 / 30) {
-      this.renderer.shadowMap.needsUpdate = true;
-      this.lastShadowTime = shadowTime;
-    }
+    // The light follows the player: its shadow texture and projection must update together.
+    this.renderer.shadowMap.needsUpdate = this.quality !== "low";
     this.renderer.shadowMap.enabled = this.quality !== "low";
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
@@ -470,8 +465,8 @@ export class Experience extends EventEmitter {
     });
   }
 
-  setState(s: GameState) {
-    this.clearInput();
+  setState(s: GameState, preserveMovement = false) {
+    if (!preserveMovement) this.clearInput();
     this.state = s;
     this.emit("stateChange", s);
   }
@@ -479,11 +474,11 @@ export class Experience extends EventEmitter {
   // Crossing the studio threshold changes the camera and location, without unloading terrain.
   exitRoom() {
     if (this.state !== "ROOM") return;
-    this.world.activateStreet(); this.setState("STREET"); this.emit("enterStreet");
+    this.world.activateStreet(); this.setState("STREET", true); this.emit("enterStreet");
   }
   enterRoom() {
     if (this.state !== "STREET") return;
-    this.world.activateRoom(); this.setState("ROOM"); this.emit("enterRoom");
+    this.world.activateRoom(); this.setState("ROOM", true); this.emit("enterRoom");
   }
 
   private checkRaycastHover(screenX: number, screenY: number) {
@@ -713,12 +708,14 @@ export class Experience extends EventEmitter {
         this.sampleFrames = 0;
         return;
       }
-      const interval = 1000 / SETTINGS[this.quality].fps;
-      const elapsed = now - this.lastTime;
-      if (elapsed < interval - 1) return;
-      // The 1 ms tolerance can accept an early frame. Advance at least one slot;
-      // modulo alone would leave lastTime unchanged and render that slot twice.
-      this.lastTime += Math.max(1, Math.floor(elapsed / interval)) * interval;
+      // Balanced/High follow display refresh. A 60 Hz gate creates uneven intervals on 90/144 Hz screens.
+      // Keep only the deliberate 30 Hz battery-saving cap in Lite.
+      if (this.quality === "low") {
+        const interval = 1000 / SETTINGS.low.fps;
+        const elapsed = now - this.lastTime;
+        if (elapsed < interval - 1) return;
+        this.lastTime += Math.max(1, Math.floor(elapsed / interval)) * interval;
+      } else this.lastTime = now;
       // Scheduling remainder controls pacing; simulation uses only time since its last update.
       const delta = Math.min(now - lastUpdateTime, 50);
       lastUpdateTime = now;
@@ -769,6 +766,11 @@ export class Experience extends EventEmitter {
       this.character.resolveMovement(startX, startZ, intendedX, intendedZ, delta, surface);
 
       if (isStreet) {
+        // Carry the camera with actual resolved travel. Damping now handles framing changes,
+        // rather than adding a second layer of delay to every start, stop and direction change.
+        const travelX = pos.x - startX, travelZ = pos.z - startZ;
+        this.camera.position.x += travelX; this.camera.position.z += travelZ;
+        this.cameraLookAt.x += travelX; this.cameraLookAt.z += travelZ;
         const shift = oceanWrap(pos.x, pos.z);
         if (Math.abs(shift.x) > 1 || Math.abs(shift.z) > 1) {
           pos.x += shift.x; pos.z += shift.z;
