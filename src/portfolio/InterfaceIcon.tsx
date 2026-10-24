@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 
-export type InterfaceIconName = "back" | "arrow" | "close" | "grid" | "camera" | "sound" | "muted" | "home" | "leaf" | "gem" | "check" | "reset" | "jump" | "move" | "copy";
+export type InterfaceIconName = "map" | "back" | "arrow" | "close" | "grid" | "camera" | "sound" | "muted" | "home" | "leaf" | "gem" | "check" | "reset" | "jump" | "move" | "copy";
 const paths: Record<InterfaceIconName, ReactNode> = {
+  map: <><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3ZM9 3v15M15 6v15" /></>,
   back: <><path d="m10 6-6 6 6 6M4 12h16" /></>,
   arrow: <><path d="M6 18 18 6M6 6h12v12" /></>,
   close: <path d="m6 6 12 12M6 18 18 6" />,

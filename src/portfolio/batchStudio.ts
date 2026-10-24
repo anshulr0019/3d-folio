@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 /** Call once on authored, static Studio scenery, before adding movable props. */
-export function batchStudio(root: THREE.Group) {
+export function batchStudio(root: THREE.Group, cellSize = 0) {
   const buckets = new Map<string, { owner: THREE.Object3D; meshes: THREE.Mesh<THREE.BufferGeometry, THREE.Material>[] }>();
   root.updateWorldMatrix(true, true);
   root.traverse(object => {
@@ -19,7 +19,9 @@ export function batchStudio(root: THREE.Group) {
     const geometry = object.geometry as THREE.BufferGeometry;
     const attributes = Object.entries(geometry.attributes).sort(([a], [b]) => a.localeCompare(b))
       .map(([name, attribute]) => `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`).join("|");
-    const key = [owner.uuid, object.material.uuid, object.castShadow, object.receiveShadow, object.renderOrder,
+    // Keep outdoor batches local so off-screen scenery can be culled.
+    const cell = cellSize && owner === root ? `${Math.floor(object.matrixWorld.elements[12] / cellSize)},${Math.floor(object.matrixWorld.elements[14] / cellSize)}` : "";
+    const key = [cell, owner.uuid, object.material.uuid, object.castShadow, object.receiveShadow, object.renderOrder,
       object.layers.mask, object.geometry.index !== null, attributes].join("/");
     let bucket = buckets.get(key);
     if (!bucket) { bucket = { owner, meshes: [] }; buckets.set(key, bucket); }

@@ -5,6 +5,7 @@ import { disposeObject } from "./dispose";
 import { WeatherSystem, type WeatherType } from "./Weather";
 import { PhysicsPropsSystem } from "./PhysicsProps";
 import { CollectiblesSystem } from "./Collectibles";
+import { Island } from "./Island";
 import { StudioCompanion } from "./StudioCompanion";
 import { buildStudio, STUDIO } from "./Studio";
 import { buildCampus, type CampusObstacle } from "./Campus";
@@ -30,6 +31,8 @@ function createContactShadowTexture() {
 
 /** Scene lifecycle shared by the studio and the compact outdoor campus. */
 export class World {
+  isOutdoor = false;
+  island: Island;
   roomGroup = new THREE.Group();
   streetGroup = new THREE.Group();
   zones: Zone[] = [];
@@ -55,7 +58,7 @@ export class World {
 
   constructor(public scene: THREE.Scene, private quality: RenderQuality = "balanced", manager = THREE.DefaultLoadingManager) {
     this.roomGroup.name = "Developer Studio";
-    this.streetGroup.name = "Project Campus";
+    this.streetGroup.name = "Anshul’s Island";
     this.weather = new WeatherSystem(scene);
     scene.add(this.ambientLight, this.sunLight, this.sunLight.target);
     this.sunLight.shadow.mapSize.set(1024, 1024);
@@ -68,13 +71,17 @@ export class World {
     this.roomGroup.add(this.roomCeiling, this.roomWarm);
 
     const shadowTexture = createContactShadowTexture();
-    const studio = buildStudio(this.roomGroup, shadowTexture);
+    const studio = buildStudio(this.roomGroup, shadowTexture, { background: false });
     this.roomZones = studio.zones; this.roomRings = studio.markers;
     this.interactiveObjects.push(...studio.interactive);
     const campus = buildCampus(this.streetGroup, manager, shadowTexture);
     this.streetZones = campus.zones; this.streetRings = campus.markers;
     this.campusObstacles = campus.obstacles; this.campusDispose = campus.dispose;
     this.interactiveObjects.push(...campus.interactive);
+    this.island = new Island(this.streetGroup);
+    this.streetZones.push(...this.island.zones);
+    this.interactiveObjects.push(...this.island.interactive);
+    this.campusObstacles.push({x:-8.03,z:0,halfX:0.16,halfZ:8.1},{x:0,z:-8.03,halfX:8.1,halfZ:0.16},{x:25,z:-10,halfX:1.9,halfZ:1.9},{x:23,z:24,halfX:2,halfZ:1.5});
     this.physicsProps.buildRoomProps(this.roomGroup);
     this.physicsProps.buildStreetProps(this.streetGroup);
     this.collectibles.buildGems(this.roomGroup, this.streetGroup);
@@ -91,13 +98,14 @@ export class World {
       color: 0x253b34, transparent: true, opacity: 0, depthTest: false, depthWrite: false,
     }));
     this.fadeOverlay.renderOrder = 9999; this.fadeOverlay.visible = false; scene.add(this.fadeOverlay);
-    scene.add(this.roomGroup); this.activateRoom(); this.setQuality(quality);
+    this.zones = [...this.roomZones, ...this.streetZones];
+    scene.add(this.roomGroup, this.streetGroup); this.activateRoom(); this.setQuality(quality);
   }
 
   activateRoom() {
-    this.zones = this.roomZones;
+    this.isOutdoor = false;
     this.weather.setWeather("clear");
-    this.scene.background = new THREE.Color(STUDIO.background); this.scene.fog = null;
+    this.scene.background = new THREE.Color(STUDIO.background); this.scene.fog = new THREE.Fog(STUDIO.background, 35, 65);
     this.ambientLight.color.setHex(0xfff4df); this.ambientLight.intensity = 1.25;
     this.sunLight.color.setHex(0xffe3b1); this.sunLight.intensity = 2.4;
     this.sunLight.position.set(-9, 16, 8); this.sunLight.target.position.set(0, 0, 0);
@@ -106,8 +114,8 @@ export class World {
   }
 
   activateStreet() {
-    this.zones = this.streetZones;
-    this.scene.background = new THREE.Color(STUDIO.background); this.scene.fog = null;
+    this.isOutdoor = true;
+    this.scene.background = new THREE.Color(STUDIO.background); this.scene.fog = new THREE.Fog(STUDIO.background, 35, 65);
     this.ambientLight.color.setHex(0xf2f2dc); this.ambientLight.intensity = 1.4;
     this.sunLight.color.setHex(0xffe8bf); this.sunLight.intensity = 2.5;
     this.sunLight.position.set(-15, 32, 12); this.sunLight.target.position.set(0, 0, -14);
@@ -121,7 +129,7 @@ export class World {
       this.scene.background = new THREE.Color(0xa1aea2);
       this.ambientLight.color.setHex(0xc6d4ce); this.ambientLight.intensity = 1.1;
       this.sunLight.color.setHex(0xe4eae4); this.sunLight.intensity = 1.4;
-    } else if (this.streetGroup.parent) this.activateStreet();
+    } else if (this.isOutdoor) this.activateStreet();
     else this.activateRoom();
   }
 
@@ -147,15 +155,23 @@ export class World {
   }
   setQuality(quality: RenderQuality) {
     this.quality = quality;
+    this.island?.setQuality(quality);
     if (quality === "low") this.setWeather("clear");
   }
   updateRings(t: number, dt = 0.016, charPos?: THREE.Vector3, charVel?: THREE.Vector3, isSprinting = false) {
-    const isStreet = !!this.streetGroup.parent;
+    const isStreet = this.isOutdoor;
     if (charPos && charVel) {
       this.physicsProps.update(charPos, charVel, isSprinting, dt, isStreet ? "street" : "room");
       this.collectibles.update(t, charPos, isStreet ? "street" : "room");
     }
-    if (!isStreet && charPos) this.companion.update(t, charPos);
+    if (charPos) {
+      this.companion.update(t, charPos, dt, isStreet);
+      if (charVel) this.island.update(t, dt, charPos, charVel);
+      if (isStreet) {
+        this.sunLight.position.set(charPos.x - 15, 32, charPos.z + 12);
+        this.sunLight.target.position.set(charPos.x, 0, charPos.z);
+      }
+    }
     if (isStreet && this.quality !== "low") this.weather.update(dt);
     if (charPos) (isStreet ? this.streetRings : this.roomRings).forEach(marker => {
       const dx = marker.position.x - charPos.x, dz = marker.position.z - charPos.z;
@@ -163,6 +179,7 @@ export class World {
     });
   }
   dispose() {
+    this.island.onMessage = undefined; this.island.onProgress = undefined;
     this.campusDispose(); this.sunLight.shadow.dispose();
     this.collectibles.onCollectCallback = undefined;
     [this.roomGroup, this.streetGroup].forEach(group => { disposeObject(group); this.scene.remove(group); });

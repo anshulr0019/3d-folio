@@ -172,8 +172,8 @@ export class PhysicsPropsSystem {
   // Build Street Props
   // ─────────────────────────────────────────────
   buildStreetProps(streetGroup: THREE.Group) {
-    const streetMin = new THREE.Vector2(-17, -41);
-    const streetMax = new THREE.Vector2(17, 10);
+    const streetMin = new THREE.Vector2(-30, 10);
+    const streetMax = new THREE.Vector2(30, 60);
 
     // Street Soccer Ball (Near Plaza entrance)
     const ballGeo = new THREE.SphereGeometry(0.55, 18, 14);
@@ -183,7 +183,7 @@ export class PhysicsPropsSystem {
       metalness: 0.1,
     });
     const soccer = new THREE.Mesh(ballGeo, soccerMat);
-    soccer.position.set(2.0, 0.55, -4);
+    soccer.position.set(7, 0.55, 23);
     streetGroup.add(soccer);
 
     this.props.push({
@@ -205,9 +205,9 @@ export class PhysicsPropsSystem {
 
     // Street Stacked Crates
     const cratePositions = [
-      [-15.0, -14],
-      [15.0, -32],
-      [-13.0, 7],
+      [20, 29],
+      [22, 31],
+      [21, 33],
     ];
 
     cratePositions.forEach(([cx, cz]) => {

@@ -4,15 +4,17 @@ import { STUDIO } from "./Studio";
 import { PROJECT_EXHIBITS } from "./projectExhibits";
 import type { Zone } from "./World";
 import { createSignMaterial } from "./signMaterial";
+import { shoreline } from "./islandLayout";
+
 
 // Reference lock: extend the approved studio's oak/sage miniature architecture.
 // Borrow Bruno's compact landmarks, physical wayfinding and tactile composition;
 // project imagery stays authentic, and one restrained accent identifies each exhibit.
-export const CAMPUS_BOUNDS = { minX: -18, maxX: 18, minZ: -42, maxZ: 12.5 };
+
 export const CAMPUS_PROJECTS = [
-  { x: -10, z: -5, turn: 0.12 },
-  { x: 10, z: -12, turn: -0.16 },
-  { x: -10, z: -25, turn: 0.12 },
+  { x: -13, z: 27, turn: 0.12 },
+  { x: 13, z: 39, turn: -0.16 },
+  { x: -13, z: 49, turn: 0.12 },
 ] as const;
 export interface CampusObstacle { x: number; z: number; halfX: number; halfZ: number }
 
@@ -84,25 +86,51 @@ export function buildCampus(group: THREE.Group, manager: THREE.LoadingManager, s
     obstacles.push({ x, z, halfX: 1.5, halfZ: 0.7 });
   }
 
-  const background = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), mat(STUDIO.background));
-  background.rotation.x = -Math.PI / 2; background.position.set(0, -0.76, -14); group.add(background);
-  box(group, [41, 0.7, 57], [0, -0.37, -14.5], STUDIO.linen, 0.28);
-  box(group, [40.3, 0.05, 56.3], [0, -0.015, -14.5], 0xa7b58c, 0.2);
-  // Narrow pedestrian spine plus cross-paths and a loop around the central garden.
-  box(group, [5.6, 0.02, 51], [0, 0.008, -13.5], 0xe0d4bb, 0.02);
-  for (const [x, z, width] of [[-5.3, 0.3, 14], [5.3, -6.2, 14], [-5.3, -19.6, 14], [5.3, -24, 14], [0, -34.5, 19]]) {
-    box(group, [width, 0.018, 3], [x, 0.012, z], 0xe0d4bb, 0.02);
+  // One continuous island. Sand extends below the lawn, then gives way to water.
+  function terrain(offset: number, height: number, color: number) {
+    const shape = new THREE.Shape();
+    shoreline(offset, 192).forEach(([x, z], i) => i ? shape.lineTo(x, -z) : shape.moveTo(x, -z));
+    shape.closePath();
+    const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat(color));
+    mesh.rotation.x = -Math.PI / 2; mesh.position.y = height; mesh.receiveShadow = true; group.add(mesh);
   }
-  const loop = new THREE.Mesh(new THREE.RingGeometry(2.9, 6.3, 64), mat(0xe0d4bb));
-  loop.rotation.x = -Math.PI / 2; loop.position.set(0, 0.026, -12); loop.receiveShadow = true; group.add(loop);
-  disk(group, 2.85, 0.14, [0, 0.06, -12], STUDIO.linen);
-  disk(group, 2.6, 0.08, [0, 0.14, -12], 0x8f9f75);
-  obstacles.push({ x: 0, z: -12, halfX: 2.85, halfZ: 2.85 });
-  tree(0, -12, 1.15);
-  for (let z = 9; z >= -39; z -= 2) {
-    box(group, [0.02, 0.002, 1.8], [-2.55, 0.023, z], 0xc8bda4, 0.001);
-    box(group, [0.02, 0.002, 1.8], [2.55, 0.023, z], 0xc8bda4, 0.001);
+  terrain(3.0, -0.12, 0xdac69e); terrain(0, -0.025, 0x9fac83);
+  const inner = shoreline(-0.03, 192), outer = shoreline(0.65, 192);
+  const shoreVertices: number[] = [], shoreIndices: number[] = [];
+  inner.forEach(([x,z],i) => {
+    shoreVertices.push(x,-0.027,z,outer[i][0],-0.119,outer[i][1]);
+    const a=i*2,b=((i+1)%inner.length)*2;
+    shoreIndices.push(a,b,a+1,a+1,b,b+1);
+  });
+  const skirtGeometry=new THREE.BufferGeometry();
+  skirtGeometry.setAttribute("position",new THREE.Float32BufferAttribute(shoreVertices,3));skirtGeometry.setIndex(shoreIndices);skirtGeometry.computeVertexNormals();
+  const skirtMaterial=mat(0xdac69e).clone();skirtMaterial.side=THREE.DoubleSide;
+  group.add(new THREE.Mesh(skirtGeometry,skirtMaterial));
+  // Rounded paths join the studio, exhibits and discoveries without enclosing the visitor.
+  function path(points: number[][], width = 2.8) {
+    const curve = new THREE.CatmullRomCurve3(points.map(([x, z]) => new THREE.Vector3(x, 0.004, z)));
+    const samples = curve.getPoints(80), vertices: number[] = [], indices: number[] = [];
+    samples.forEach((point, i) => {
+      const tangent = curve.getTangent(i / 80), nx = -tangent.z * width / 2, nz = tangent.x * width / 2;
+      vertices.push(point.x + nx, point.y, point.z + nz, point.x - nx, point.y, point.z - nz);
+      if (i < 80) { const n = i * 2; indices.push(n, n + 2, n + 1, n + 1, n + 2, n + 3); }
+    });
+    const geometry = new THREE.BufferGeometry(); geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3)); geometry.setIndex(indices); geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, mat(0xe1d3b5)); mesh.receiveShadow = true; group.add(mesh);
   }
+  path([[0, 7.8], [0, 16], [2, 25], [0, 36], [2, 48], [0, 60], [0, 66]], 4);
+  path([[0, 15], [-10, 13], [-16, 18]], 2.8);
+  path([[0, 13], [15, 10], [24, 0], [25, -6]], 2.8);
+  path([[1, 26], [14, 28], [23, 25]], 3);
+  path([[0, 32], [-12, 32], [-25, 41], [-24, 53], [-13, 54]], 2.8);
+  path([[1, 43], [13, 44]], 3);
+  path([[1, 53], [-13, 54]], 3);
+  // The studio is the northern landmark; its open threshold joins this path directly.
+  const welcome = label(group, ["TAKE THE SCENIC ROUTE", "Pond ←   /   Lighthouse →"], [5.6, 1.2], [0, 1.4, 11.5]);
+  box(group, [5.9, 1.45, 0.16], [0, 1.4, 11.4], STUDIO.oak);
+  for (const x of [-2.4, 2.4]) box(group, [0.12, 0.8, 0.12], [x, 0.4, 11.4], STUDIO.forest);
+  obstacles.push({ x: 0, z: 11.4, halfX: 3, halfZ: 0.2 });
+  zone("island_welcome", "Find your own route", 0, 9.3, welcome, STUDIO.forest, 1.8);
 
   // Each real project has its own architectural silhouette and a real screen capture.
   const loader = new THREE.TextureLoader(manager);
@@ -140,67 +168,47 @@ export function buildCampus(group: THREE.Group, manager: THREE.LoadingManager, s
     planter(layout.x, layout.z - 3.0, 6.8);
   });
 
-  // Arrival gate and a physical directory; returning to the studio stays obvious.
-  for (const x of [-2.1, 2.1]) box(group, [0.25, 3.8, 0.35], [x, 1.9, 11.3], STUDIO.oak);
-  box(group, [4.7, 0.7, 0.55], [0, 3.85, 11.3], STUDIO.forest);
-  label(group, ["THE STUDIO"], [4.4, 0.55], [0, 3.85, 11.6], "#eee8d9", "#355c4b");
-  const returnSign = label(group, ["BACK TO STUDIO"], [3.8, 0.6], [0, 0.032, 10.3]); returnSign.rotation.x = -Math.PI / 2;
-  zone("return_studio", "Return to studio", 0, 9.7, returnSign, STUDIO.forest, 1.3);
-  box(group, [2.6, 2.0, 0.14], [4.7, 1.8, 6.2], STUDIO.oak);
-  const directory = label(group, ["THE CAMPUS", "01  Infyn / connections", "02  DeliveryWatch / SaaS", "03  Portfolio / creative"], [2.4, 1.8], [4.7, 1.8, 6.3]);
-  for (const x of [3.55, 5.85]) box(group, [0.12, 1, 0.14], [x, 0.5, 6.2], STUDIO.oak);
-  obstacles.push({ x: 4.7, z: 6.2, halfX: 1.45, halfZ: 0.3 });
-  zone("projects", "Selected work", 3.5, 7.5, directory);
+  const bio = label(group, ["A LITTLE ABOUT ME", "Anshul Kumar", "Full-stack developer / Delhi"], [5, 1.9], [13, 2.0, 17]);
+  box(group, [5.3, 2.2, 0.18], [13, 2, 16.9], STUDIO.oak);
+  zone("about", "About Anshul", 13, 20, bio);
+  obstacles.push({ x: 13, z: 17, halfX: 2.7, halfZ: 0.4 });
+  const skills = label(group, ["THE TOOL SHED", "React / Next.js / TypeScript", "Node.js / Supabase / Three.js"], [5.6, 2], [14, 2, 52]);
+  box(group, [6.1, 0.18, 3], [14, 3.8, 51], STUDIO.forest);
+  for (const x of [11.2, 16.8]) box(group, [0.16, 3.8, 0.16], [x, 1.9, 52], STUDIO.oak);
+  zone("skills", "Tools & skills", 14, 55, skills);
+  obstacles.push({ x: 14, z: 52, halfX: 3, halfZ: 0.4 });
+  const education = label(group, ["LEARNING, ALWAYS", "B.Tech / Computer Science", "Building alongside academics"], [4.8, 2], [-10, 1.8, 60]);
+  box(group, [5, 2.2, 0.18], [-10, 1.8, 59.9], STUDIO.oak);
+  zone("experience", "Education", -10, 63, education);
+  obstacles.push({ x: -10, z: 60, halfX: 2.6, halfZ: 0.4 });
 
-  // Portfolio chapters live in smaller garden stops, rather than duplicate houses.
-  const bio = label(group, ["A LITTLE ABOUT ME", "Anshul Kumar", "Full-stack developer", "Delhi, India"], [4.2, 2.4], [11, 2.15, 2.0]);
-  box(group, [4.4, 2.6, 0.2], [11, 2.15, 1.85], STUDIO.oak);
-  for (const x of [9, 13]) box(group, [0.15, 1.1, 0.18], [x, 0.55, 1.85], STUDIO.oak);
-  zone("about", "About Anshul", 10.5, 5.2, bio);
-  obstacles.push({ x: 11, z: 1.9, halfX: 2.4, halfZ: 0.6 });
-  bench(11, 0.2);
-  const skills = label(group, ["THE TOOL SHED", "TypeScript / React / Next.js", "Node.js / Supabase", "Three.js / WebGL"], [5.4, 2.6], [10.5, 2.3, -27.2]);
-  box(group, [5.7, 2.9, 0.2], [10.5, 2.3, -27.35], STUDIO.oak);
-  box(group, [6.4, 0.2, 3.3], [10.5, 4.05, -28], STUDIO.forest);
-  for (const x of [7.5, 13.5]) box(group, [0.18, 4.0, 0.18], [x, 2.0, -26.5], STUDIO.oak);
-  zone("skills", "Tools & skills", 10.5, -23.9, skills);
-  obstacles.push({ x: 10.5, z: -27.3, halfX: 3.1, halfZ: 0.6 });
-  const education = label(group, ["LEARNING, ALWAYS", "B.Tech / Computer Science", "GGSIPU affiliated", "Building alongside academics"], [4.6, 2.3], [10.5, 1.9, -34]);
-  box(group, [4.8, 2.5, 0.2], [10.5, 1.9, -34.15], STUDIO.oak);
-  for (const x of [8.3, 12.7]) box(group, [0.15, 0.9, 0.18], [x, 0.45, -34.15], STUDIO.oak);
-  zone("experience", "Education", 10.5, -31.1, education);
-  obstacles.push({ x: 10.5, z: -34.1, halfX: 2.6, halfZ: 0.6 });
-
-  // A quiet contact garden replaces the generic gold monument.
-  disk(group, 7.3, 0.018, [0, 0.018, -36], 0xe0d4bb);
-  const contactTitle = label(group, ["LET'S MAKE SOMETHING.", "OPEN TO OPPORTUNITIES"], [6.6, 1.7], [0, 2.8, -40]);
-  box(group, [6.9, 1.9, 0.18], [0, 2.8, -40.15], STUDIO.forest);
-  for (const x of [-3.4, 3.4]) box(group, [0.18, 3.65, 0.2], [x, 1.825, -40.15], STUDIO.oak);
-  zone("contact", "Let's talk", 0, -37.5, contactTitle, STUDIO.forest, 2.0);
-  obstacles.push({ x: 0, z: -40.1, halfX: 3.6, halfZ: 0.6 });
-  for (const [id, title, x] of [["contact_github", "GITHUB", -5.1], ["contact_gmail", "EMAIL", -1.7], ["contact_linkedin", "LINKEDIN", 1.7], ["contact_phone", "CONTACT", 5.1]] as const) {
-    box(group, [2.65, 1.15, 0.7], [x, 0.575, -38.6], STUDIO.oak);
-    const face = label(group, [title], [2.4, 0.45], [x, 0.78, -38.235]);
-    zone(id, title === "CONTACT" ? "Contact details" : title, x, -36.1, face, STUDIO.forest, 1.45);
-    obstacles.push({ x, z: -38.6, halfX: 1.4, halfZ: 0.6 });
+  // Contact lives on a real wooden pier at the southern shore.
+  box(group, [8.2, 0.2, 12], [0, -0.09, 65], STUDIO.oak);
+  for (let z = 59.5; z < 71; z += 0.5) box(group, [8.15, 0.015, 0.035], [0, 0.018, z], 0x987347, 0.005);
+  for (const x of [-4, 4]) for (const z of [60, 65, 70]) disk(group, 0.12, 1.6, [x, -0.3, z], STUDIO.forest);
+  const contact = label(group, ["LET'S MAKE SOMETHING.", "A conversation by the water"], [6.7, 1.3], [0, 2.5, 62]);
+  zone("contact", "Let's talk", 0, 65, contact, STUDIO.forest, 2);
+  for (const [id, title, x] of [["contact_github", "GITHUB", -2.7], ["contact_gmail", "EMAIL", 0], ["contact_linkedin", "LINKEDIN", 2.7]] as const) {
+    box(group, [2.3, 0.9, 0.7], [x, 0.45, 69], STUDIO.forest);
+    const face = label(group, [title], [2.1, 0.5], [x, 0.6, 69.36]);
+    zone(id, title, x, 70.6, face, STUDIO.forest, 1.25);
+    obstacles.push({ x, z: 69, halfX: 1.15, halfZ: 0.4 });
   }
 
-  bench(-8.5, -35.8, 0.35); bench(8.5, -35.8, -0.35);
-  planter(-11, -39.5, 3.6); planter(11, -39.5, 3.6);
-  tree(8.2, -40, 0.85);
+  // Quiet garden: a sheltered detour, with no task or unlock required.
+  disk(group, 4.7, 0.03, [-25, 0, 41], 0xd9cfb3);
+  bench(-25, 39); bench(-28, 42, Math.PI / 2);
+  const garden = label(group, ["STAY A LITTLE.", "Nothing to complete here."], [3.8, 1.1], [-25, 1.4, 37]);
+  zone("garden", "Take a quiet moment", -25, 41, garden, STUDIO.forest, 3.5);
+  for (const [x, z, scale] of [[-12,-14,1.1],[-20,-8,1],[-30,2,1.2],[14,-13,1.1],[30,7,1],[-31,33,1.2],[-30,47,1],[28,47,1.2],[21,60,0.9],[-23,59,1.1],[-9,18,0.85],[29,34,0.9]]) tree(x, z, scale);
+  for (const [x, z] of [[7,23], [-7,43], [23,12]]) bench(x,z);
+  planter(13, 14, 5); planter(-18, 57, 3.5);
+  // Batch only static geometry. Animated discoveries are added afterwards.
 
-  for (const [x, z, scale] of [[-17, 6, 1.1], [-17, -12, 0.9], [-17, -34, 1.2], [17, 7, 1.1], [17, -3, 0.85], [17, -19, 1.0], [17, -38, 1.1], [-8, -39, 0.75]]) tree(x, z, scale);
-  for (const [x, z] of [[-5, 5], [6, -20], [-5.5, -31], [-12, 8]]) bench(x, z);
-  for (const [x, z] of [[-17, -4], [17, -12], [-17, -25], [16, -30]]) planter(x, z, 3.5);
-  // Small bollards mark turns without a row of competing light sources.
-  for (const [x, z] of [[-3.7, 5], [3.7, -3], [-5.3, -12], [5.3, -12], [-3.7, -28], [3.7, -33]]) {
-    disk(group, 0.13, 0.85, [x, 0.425, z], STUDIO.forest);
-    disk(group, 0.14, 0.12, [x, 0.88, z], STUDIO.linen);
-  }
   return { zones, interactive, markers, obstacles, dispose: () => { disposed = true; } };
 }
 
-/** Resolve the avatar against authored footprints, then keep it on the campus. */
+/** Resolve solid scenery only; the shore and ocean are freely traversable. */
 export function resolveCampusCollisions(pos: THREE.Vector3, obstacles: readonly CampusObstacle[]) {
   for (let pass = 0; pass < 2; pass++) {
     for (const obstacle of obstacles) {
@@ -211,7 +219,6 @@ export function resolveCampusCollisions(pos: THREE.Vector3, obstacles: readonly 
       if (overlapX < overlapZ) pos.x = obstacle.x + (dx < 0 ? -halfX : halfX);
       else pos.z = obstacle.z + (dz < 0 ? -halfZ : halfZ);
     }
-    pos.x = THREE.MathUtils.clamp(pos.x, CAMPUS_BOUNDS.minX, CAMPUS_BOUNDS.maxX);
-    pos.z = THREE.MathUtils.clamp(pos.z, CAMPUS_BOUNDS.minZ, CAMPUS_BOUNDS.maxZ);
+
   }
 }

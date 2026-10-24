@@ -69,9 +69,15 @@ export class StudioCompanion {
     roomGroup.add(this.group);
   }
 
-  update(t: number, charPos: THREE.Vector3) {
-    // Gentle floating hover
-    this.group.position.y = this.basePos.y + Math.sin(t * 2.8) * 0.12;
+  update(t: number, charPos: THREE.Vector3, dt = 0.016, following = false) {
+    // Keep a shoulder-distance following target outdoors; return to the desk indoors.
+    const targetX = following ? charPos.x - 1.7 : this.basePos.x;
+    const targetZ = following ? charPos.z + 1.5 : this.basePos.z;
+    if (Math.hypot(this.group.position.x-targetX,this.group.position.z-targetZ)>25) this.group.position.set(targetX,1.9,targetZ);
+    const blend = 1 - Math.exp(-2.5 * dt);
+    this.group.position.x += (targetX-this.group.position.x)*blend;
+    this.group.position.z += (targetZ-this.group.position.z)*blend;
+    this.group.position.y = (following ? 2.1 : this.basePos.y) + Math.sin(t * 2.8) * 0.12;
 
     // Smooth head-tracking look at character
     const dx = charPos.x - this.group.position.x;
@@ -80,7 +86,7 @@ export class StudioCompanion {
 
     if (distSq < 10.0 * 10.0) {
       const targetAngle = Math.atan2(dx, dz);
-      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, targetAngle, 0.08);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, targetAngle, (1-Math.exp(-5*dt)));
       this.head.rotation.x = THREE.MathUtils.lerp(
         this.head.rotation.x,
         (charPos.y - this.group.position.y) * 0.2,
@@ -91,7 +97,7 @@ export class StudioCompanion {
     // Wiggle response after interaction
     if (this.wiggle > 0) {
       this.head.rotation.z = Math.sin(t * 20.0) * this.wiggle;
-      this.wiggle *= 0.94;
+      this.wiggle *= Math.exp(-4*dt);
     }
   }
 
@@ -106,10 +112,10 @@ export class StudioCompanion {
 
     const quotes = [
       "Beep boop! Anshul is building awesome web apps & SaaS products! 🚀",
-      "Tip: Try sprinting with [Shift] and jumping with [Space]! ✨",
-      "Have you collected all 5 Hidden Skill Gems yet? 💎",
+      "The five stones at Melody pond play notes when you step on them.",
+      "The wind workshop powers the little lanterns along the island paths.",
       "Press [P] anytime to enter Photo Mode and take snapshots! 📸",
-      "Easter Egg: Try the Konami code [↑↑↓↓←→←→BA]! 🪩",
+      "Head out to sea on your board. The ocean loops, so there is always a way back.",
     ];
     return quotes[Math.floor(Math.random() * quotes.length)];
   }

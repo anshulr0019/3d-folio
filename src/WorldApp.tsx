@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { Experience, GameState } from "./portfolio/Experience";
 import type { Zone } from "./portfolio/World";
 import { CONTENT } from "./portfolio/content";
+import type { IslandProgress } from "./portfolio/Island";
 import { WorldInterface, PhotoInterface } from "./portfolio/WorldInterface";
 import { WorldPanel } from "./portfolio/WorldPanel";
 import { InterfaceIcon } from "./portfolio/InterfaceIcon";
@@ -38,7 +39,7 @@ function IntroOverlay({ onDone }: { onDone: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useOverlayFocus(ref, onDone);
   const steps = [
-    { title: "Make yourself at home.", sub: "A studio, a project campus, and a few things to discover. Take the scenic route through my work." },
+    { title: "Make yourself at home.", sub: "One island, a musical pond, a lighthouse, and a few things to bring to life. Take the scenic route through my work." },
     { title: "A world you can explore.", sub: "Use WASD or the arrow keys to walk. Hold Shift to run, and press Space to jump. On a phone, use the on-screen controls." },
     { title: "Follow your curiosity.", sub: "Walk up to an exhibit and press E, or tap its prompt. Open Explore for chapters, travel shortcuts, and settings." },
   ];
@@ -120,6 +121,8 @@ export default function WorldApp({ quality, onExit, sourceRect, portfolioRef, on
   const [gemsCount, setGemsCount] = useState({ collected: 0, total: 5 });
   const [photoMode, setPhotoMode] = useState(false);
   const [showDevStats, setShowDevStats] = useState(false);
+  const [islandPosition, setIslandPosition] = useState({x:0,z:3});
+  const [islandProgress, setIslandProgress] = useState<IslandProgress>({pond:0,lighthouse:false,windmill:false});
   const [guideOpen, setGuideOpen] = useState(false);
   const [isTouchDevice, setIsTouchDevice] = useState(() => matchMedia("(pointer: coarse), (max-width: 640px)").matches || navigator.maxTouchPoints > 0);
   useEffect(() => {
@@ -182,6 +185,10 @@ export default function WorldApp({ quality, onExit, sourceRect, portfolioRef, on
       showToast(`Byte: ${quote}`, 4000);
     });
 
+    exp.on("worldMessage", (message: string) => showToast(message, 5000));
+    exp.on("islandProgress", (progress: IslandProgress) => setIslandProgress(progress));
+    exp.on("islandPosition", (position: {x:number;z:number}) => setIslandPosition(position));
+
     exp.on("partyMode", () => {
       showToast("Disco mode enabled.", 3000);
     });
@@ -205,6 +212,7 @@ export default function WorldApp({ quality, onExit, sourceRect, portfolioRef, on
     await exp.init(progress => { if (expRef.current === exp) setLoadProgress(previous => Math.max(previous, progress)); });
     if (expRef.current !== exp || loadingFailed.current) return;
 
+    setIslandProgress({...exp.world.island.progress});
     // If transition mode, play entrance animation instead of showing LoadingScreen
     if (sourceRectRef.current && portfolioRefStable.current) {
       playEntrance(exp);
@@ -469,6 +477,7 @@ export default function WorldApp({ quality, onExit, sourceRect, portfolioRef, on
       {(error || (isTransitionMode && uiState === "loading")) && <WorldEntryOverlay progress={loadProgress} error={error} onExit={onExit} />}
       {uiState === "playing" && !photoMode && !modalSection && !error && <WorldInterface
         location={location} nearestZone={gameState === "ROOM" || gameState === "STREET" ? nearestZone : null}
+        islandPosition={islandPosition} islandProgress={islandProgress}
         gemsCount={gemsCount} visited={visited} quality={activeQuality} avatarStatus={avatarStatus} isTouchDevice={isTouchDevice}
         onExit={onExit} onPhoto={handleTogglePhotoMode} onInteract={handleInteract}
         onSection={id => expRef.current?.openModal(id)} onTravel={destination => expRef.current?.travelTo(destination)}

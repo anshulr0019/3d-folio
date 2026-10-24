@@ -13,6 +13,8 @@ import gsap from "gsap";
 import { resolveQuality, SETTINGS, type Quality, type RenderQuality } from "./quality";
 import { disposeObject } from "./dispose";
 import { resolveCampusCollisions } from "./Campus";
+import { ISLAND_STOPS, oceanWrap, type IslandDestination } from "./islandLayout";
+import { RenderBudget } from "./renderBudget";
 import { PhotoGesture } from "./PhotoGesture";
 
 export type GameState =
@@ -77,7 +79,7 @@ export class Experience extends EventEmitter {
 
   // Active zone
   nearestZone: Zone | null = null;
-  private TRANSITION_Z = 7.0;
+  private lastPositionEmit = 0;
 
   // Photo Mode
   photoMode = false;
@@ -104,6 +106,8 @@ export class Experience extends EventEmitter {
   private sampleStart = 0;
   private sampleFrames = 0;
   private slowSamples = 0;
+  private renderBudget = new RenderBudget();
+  private lastShadowTime = -1000;
   private partyInterval: ReturnType<typeof setInterval> | null = null;
   private loadingManager = new THREE.LoadingManager();
 
@@ -120,7 +124,7 @@ export class Experience extends EventEmitter {
     // ── Renderer ──────────────────────────────
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,
+      antialias: true,
       powerPreference: this.quality === "low" ? "low-power" : "default",
     });
     this.renderer.setPixelRatio(1);
@@ -131,6 +135,7 @@ export class Experience extends EventEmitter {
     const h = canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.renderer.shadowMap.enabled = this.quality !== "low";
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
@@ -287,6 +292,8 @@ export class Experience extends EventEmitter {
       if (!this.disposed) this.emit("avatarStatus", status);
     });
     this.cameraOffset.copy(this.roomCameraOffset);
+    this.world.island.onMessage = message => this.emit("worldMessage", message);
+    this.world.island.onProgress = progress => this.emit("islandProgress", progress);
     this.world.collectibles.onCollectCallback = (gem, count, total) => {
       this.emit("gemCollected", { gem, count, total });
     };
@@ -330,6 +337,8 @@ export class Experience extends EventEmitter {
   setQuality(quality: RenderQuality, automatic = false) {
     if (!automatic) this.autoQuality = false;
     this.quality = quality;
+    this.renderBudget.reset();
+    this.lastShadowTime = -1000;
     if (SETTINGS[quality].bloom && !this.composer) this.buildPostProcessing(this.canvas.clientWidth, this.canvas.clientHeight);
     if (!SETTINGS[quality].bloom) this.disposePostProcessing();
     this.world?.setQuality(quality);
@@ -341,6 +350,12 @@ export class Experience extends EventEmitter {
 
   private render() {
     this.renderer.info.reset();
+    // Refresh the shadow pass at 30 Hz; the scene and avatar still render at 60 Hz.
+    const shadowTime = performance.now();
+    if (this.quality !== "low" && shadowTime - this.lastShadowTime >= 1000 / 30) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.lastShadowTime = shadowTime;
+    }
     this.renderer.shadowMap.enabled = this.quality !== "low";
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
@@ -359,24 +374,17 @@ export class Experience extends EventEmitter {
     this.emit("zoneChange", null);
   }
 
-  travelTo(destination: "room" | "projects") {
+  travelTo(destination: IslandDestination) {
     if (this.state !== "ROOM" && this.state !== "STREET") return;
-    if (destination === "room") {
-      if (this.state === "STREET") this.enterRoom();
-      else this.respawn();
-    } else {
-      const arrive = () => {
-        const zone = this.world.streetZones.find(zone => zone.id === "project_0");
-        if (!zone) return;
-        this.clearInput();
-        this.character.setPosition(zone.position.x, 0, zone.position.z + 0.6, Math.PI);
-        this.cameraVelocity.set(0, 0, 0);
-        this.settleCampusCamera();
-        this.detectZone();
-      };
-      if (this.state === "ROOM") { this.once("enterStreet", arrive); this.exitRoom(); }
-      else arrive();
-    }
+    const stop = ISLAND_STOPS.find(stop => stop.id === destination);
+    if (!stop) return;
+    this.clearInput();
+    this.character.setPosition(stop.x, 0, stop.z, Math.PI);
+    if (destination === "room") this.enterRoom();
+    else this.exitRoom();
+    this.cameraVelocity.set(0, 0, 0);
+    if (destination === "room") this.settleStudioCamera(); else this.settleCampusCamera();
+    this.detectZone();
   }
 
   private cinematicTimeline: gsap.core.Timeline | null = null;
@@ -468,53 +476,14 @@ export class Experience extends EventEmitter {
     this.emit("stateChange", s);
   }
 
-  // ── Room → Street transition ──────────────
+  // Crossing the studio threshold changes the camera and location, without unloading terrain.
   exitRoom() {
     if (this.state !== "ROOM") return;
-    this.setState("DOOR_TRANSITION");
-    sound.playDoorSwoosh();
-
-    this.world.fadeToBlack(0.4, () => {
-      this.scene.remove(this.world.roomGroup);
-      this.scene.add(this.world.streetGroup);
-      this.world.activateStreet();
-      if (this.bloomPass) gsap.to(this.bloomPass, { strength: 0.15, duration: 0.8, ease: "power2.out" });
-      this.character.setPosition(0, 0, 8, Math.PI);
-      this.cameraVelocity.set(0, 0, 0);
-      this.settleCampusCamera();
-      this.cameraOffset.copy(this.streetCameraOffset);
-
-      this.world.fadeIn(0.5, () => {
-        this.setState("STREET");
-        this.emit("enterStreet");
-      });
-    });
+    this.world.activateStreet(); this.setState("STREET"); this.emit("enterStreet");
   }
-
-  // ── Street → Room transition ──────────────
   enterRoom() {
     if (this.state !== "STREET") return;
-    this.setState("DOOR_TRANSITION");
-    sound.playDoorSwoosh();
-
-    this.world.fadeToBlack(0.4, () => {
-      this.scene.remove(this.world.streetGroup);
-      this.scene.add(this.world.roomGroup);
-      this.world.activateRoom();
-
-      // Restore room bloom level
-      if (this.bloomPass) gsap.to(this.bloomPass, { strength: 0.18, duration: 0.8, ease: "power2.out" });
-
-      this.character.setPosition(0, 0, 3, Math.PI);
-      this.cameraOffset.copy(this.roomCameraOffset);
-      this.cameraVelocity.set(0, 0, 0);
-      this.settleStudioCamera();
-
-      this.world.fadeIn(0.5, () => {
-        this.setState("ROOM");
-        this.emit("enterRoom");
-      });
-    });
+    this.world.activateRoom(); this.setState("ROOM"); this.emit("enterRoom");
   }
 
   private checkRaycastHover(screenX: number, screenY: number) {
@@ -611,8 +580,10 @@ export class Experience extends EventEmitter {
   }
 
   openModal(zoneId: string) {
-    if (zoneId === "return_studio") { this.enterRoom(); return; }
+    if (zoneId === "return_studio") { this.travelTo("room"); return; }
     if (this.state !== "STREET" && this.state !== "ROOM") return;
+    if (this.world.island.interact(zoneId)) return;
+    if (zoneId === "companion") { this.emit("companionDialogue", this.world.companion.interact()); return; }
     sound.playModalPop();
     this.clearInput();
     this.setState("MODAL");
@@ -624,7 +595,7 @@ export class Experience extends EventEmitter {
     if (prev !== "MODAL") return;
     sound.playModalPop();
     this.clearInput();
-    this.setState(this.world.streetGroup.parent ? "STREET" : "ROOM");
+    this.setState(this.world.isOutdoor ? "STREET" : "ROOM");
     this.emit("closeModal");
   }
 
@@ -759,6 +730,7 @@ export class Experience extends EventEmitter {
       this.sampleFrames++;
       if (now - this.sampleStart >= 2500) {
         this.fps = Math.round(this.sampleFrames * 1000 / (now - this.sampleStart));
+        if (this.quality !== "low" && this.renderBudget.sample(this.fps)) this.resize();
         this.slowSamples = this.fps < 38 ? this.slowSamples + 1 : 0;
         if (this.autoQuality && this.slowSamples >= 2 && this.quality !== "low") this.setQuality(this.quality === "high" ? "balanced" : "low", true);
         this.sampleStart = now;
@@ -785,7 +757,7 @@ export class Experience extends EventEmitter {
       this.state !== "DOOR_TRANSITION" &&
       this.state !== "INTRO" && !this.interfaceOpen && !this.photoMode
     ) {
-      const isStreet = !!this.world.streetGroup.parent;
+      const isStreet = this.world.isOutdoor;
       const surface = isStreet ? "stone" : "wood";
       const pos = this.character.group.position;
       const startX = pos.x, startZ = pos.z;
@@ -796,6 +768,17 @@ export class Experience extends EventEmitter {
       this.applyCollisions(pos, isStreet);
       this.character.resolveMovement(startX, startZ, intendedX, intendedZ, delta, surface);
 
+      if (isStreet) {
+        const shift = oceanWrap(pos.x, pos.z);
+        if (Math.abs(shift.x) > 1 || Math.abs(shift.z) > 1) {
+          pos.x += shift.x; pos.z += shift.z;
+          this.camera.position.x += shift.x; this.camera.position.z += shift.z;
+          this.cameraLookAt.x += shift.x; this.cameraLookAt.z += shift.z;
+          this.world.companion.group.position.x += shift.x; this.world.companion.group.position.z += shift.z;
+          this.nearestZone = null; this.emit("zoneChange", null);
+          this.emit("worldMessage", "The ocean has brought you around. Find the island ahead, or use the map to return.");
+        }
+      }
       // Update character shadow under feet (works in room & street, handles jumping)
       this.world.updateCharacterShadow(pos.x, pos.z, pos.y);
     }
@@ -806,15 +789,15 @@ export class Experience extends EventEmitter {
       this.detectZone();
     }
 
-    // Door exit detection
-    if (this.state === "ROOM") {
-      if (this.character.group.position.z >= this.TRANSITION_Z && Math.abs(this.character.group.position.x) < 2.4) {
-        this.exitRoom();
+    if (this.state === "ROOM" || this.state === "STREET") {
+      const p = this.character.group.position;
+      const inside = p.x > -7.8 && p.x < 8.2 && p.z > -7.8 && p.z < 8.2;
+      if (!inside && this.state === "ROOM") this.exitRoom();
+      else if (inside && this.state === "STREET") this.enterRoom();
+      if (elapsed - this.lastPositionEmit > 200) {
+        this.lastPositionEmit = elapsed;
+        this.emit("islandPosition", { x: p.x, z: p.z });
       }
-    }
-
-    if (this.state === "STREET" && this.character.group.position.z >= 11.2 && Math.abs(this.character.group.position.x) < 2.1) {
-      this.enterRoom();
     }
     this.updateCamera(delta);
     this.world.updateFade(this.camera);
@@ -833,24 +816,13 @@ export class Experience extends EventEmitter {
   private static _tempVelocity = new THREE.Vector3();
 
   private applyCollisions(pos: THREE.Vector3, isStreet: boolean) {
-    if (isStreet) {
-      resolveCampusCollisions(pos, this.world.campusObstacles);
-    } else {
-      // Room Boundaries & Furniture Collision
-      pos.x = THREE.MathUtils.clamp(pos.x, -7.15, 7.15);
-      pos.z = THREE.MathUtils.clamp(pos.z, -7.0, Math.abs(pos.x) < 2.4 ? 7.5 : 6.8);
-
-      // Desk, Almirah & Arcade Machine Collisions
-      for (let i = 0; i < ROOM_OBSTACLES.length; i++) {
-        const obs = ROOM_OBSTACLES[i];
-        const dx = pos.x - obs.x;
-        const dz = pos.z - obs.z;
-        const distSq = dx * dx + dz * dz;
+    resolveCampusCollisions(pos, this.world.campusObstacles);
+    if (!isStreet || (pos.x > -7.8 && pos.x < 8.2 && pos.z > -7.8 && pos.z < 8.2)) {
+      for (const obs of ROOM_OBSTACLES) {
+        const dx = pos.x - obs.x, dz = pos.z - obs.z, distSq = dx*dx + dz*dz;
         if (distSq < obs.rSq && distSq > 0.0001) {
-          const dist = Math.sqrt(distSq);
-          const overlap = obs.r - dist;
-          pos.x += (dx / dist) * overlap;
-          pos.z += (dz / dist) * overlap;
+          const dist = Math.sqrt(distSq), overlap = obs.r-dist;
+          pos.x += dx/dist*overlap; pos.z += dz/dist*overlap;
         }
       }
     }
@@ -921,7 +893,7 @@ export class Experience extends EventEmitter {
       this.cameraLookAt.set(char.position.x, char.position.y + 1.2, char.position.z);
       this.camera.lookAt(this.cameraLookAt); return;
     }
-    const campus = !!this.world.streetGroup.parent;
+    const campus = this.world.isOutdoor;
     const fit = Math.max(1, (campus ? 0.85 : 1.3) / this.camera.aspect);
     const target = Experience._tempTarget.copy(campus ? this.streetCameraOffset : this.roomCameraOffset).multiplyScalar(fit);
     target.x += char.position.x * (campus ? 1 : 0.12);
@@ -935,6 +907,10 @@ export class Experience extends EventEmitter {
     this.camera.fov = THREE.MathUtils.damp(this.camera.fov, campus ? 46 : 42, 8, dt);
     this.camera.updateProjectionMatrix(); this.camera.lookAt(this.cameraLookAt);
     this.cameraYaw = Math.atan2(this.camera.position.x - this.cameraLookAt.x, this.camera.position.z - this.cameraLookAt.z);
+    if (this.scene.fog instanceof THREE.Fog) {
+      const distance = this.camera.position.distanceTo(char.position);
+      this.scene.fog.near = distance + 10; this.scene.fog.far = distance + 40;
+    }
   }
 
   resize() {
@@ -943,7 +919,7 @@ export class Experience extends EventEmitter {
     const h = this.canvas.clientHeight || window.innerHeight;
     if (!w || !h) return;
     const settings = SETTINGS[this.quality];
-    const ratio = Math.min(window.devicePixelRatio || 1, settings.pixelRatio, Math.sqrt(settings.maxPixels / (w * h)));
+    const ratio = Math.min(window.devicePixelRatio || 1, settings.pixelRatio, Math.sqrt(settings.maxPixels / (w * h))) * this.renderBudget.scale;
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, h, false);
     this.composer?.setPixelRatio(ratio);

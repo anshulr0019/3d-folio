@@ -103,7 +103,7 @@ const { Experience } = load('../src/portfolio/Experience.ts', {
   'three/examples/jsm/postprocessing/OutputPass.js': {},
   './World': {}, './Character': {}, './EventEmitter': { EventEmitter },
   './Audio': { sound: {} }, './Weather': {}, './content': {},
-  gsap: { killTweensOf() {} }, './dispose': {}, './Campus': {},
+  gsap: { killTweensOf() {} }, './dispose': {}, './renderBudget': load('../src/portfolio/renderBudget.ts'), './islandLayout': load('../src/portfolio/islandLayout.ts'), './Campus': {},
   './quality': { resolveQuality: () => 'balanced', SETTINGS: { balanced: { fps: 60, bloom: false }, low: { fps: 30, bloom: false } } },
   './PhotoGesture': { PhotoGesture },
 });

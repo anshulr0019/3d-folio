@@ -11,7 +11,7 @@ export const STUDIO = {
   forest: 0x355c4b, linen: 0xe9dfc7, ink: 0x253b34, brass: 0xb99a59,
 } as const;
 
-export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, options: { batchStatic?: boolean } = {}) {
+export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, options: { batchStatic?: boolean; background?: boolean } = {}) {
   const zones: Zone[] = [];
   const interactive: THREE.Object3D[] = [];
   const markers: THREE.Mesh[] = [];
@@ -86,7 +86,9 @@ export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, op
 
   // An open-front architectural model: no ceiling or near walls to hide the room.
   const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(180, 180), material(STUDIO.background));
-  backdrop.rotation.x = -Math.PI / 2; backdrop.position.y = -0.67; group.add(backdrop);
+  backdrop.rotation.x = -Math.PI / 2; backdrop.position.y = -0.67;
+  if (options.background !== false) group.add(backdrop);
+  else { backdrop.geometry.dispose(); }
   box(group, [16.6, 0.6, 16.6], [0, -0.32, 0], linen, 0.15);
   const plankColors = [0xc8a77b, 0xc5a277, 0xcbaa80, 0xc2a076];
   const plankMaterials = plankColors.map(color => material(color));
@@ -207,7 +209,7 @@ export function buildStudio(group: THREE.Group, shadowTexture: THREE.Texture, op
   plaque(["ANSHUL'S STUDIO", "BUILDING FOR THE WEB & BEYOND"], [4.45, 1.16], [-3.4, 3.9, -7.72]);
   box(group, [2.0, 2.5, 0.12], [2.1, 3.15, -7.8], oak);
   plaque(["MAKE.", "SOMETHING", "USEFUL."], [1.8, 2.3], [2.1, 3.15, -7.72], "#e9dfc7", "#355c4b", true);
-  const exit = plaque(["PROJECT CAMPUS  →"], [3.8, 0.8], [0, 0.033, 6.6]);
+  const exit = plaque(["EXPLORE THE ISLAND  →"], [3.8, 0.8], [0, 0.033, 6.6]);
   exit.rotation.x = -Math.PI / 2;
   box(group, [4.8, 0.025, 0.15], [0, 0.02, 7.55], forest, 0.01);
   plaque(["01 / THE STUDIO"], [3.5, 0.4], [-4.6, -0.28, 8.315]);
